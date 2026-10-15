@@ -64,17 +64,16 @@ pub fn footnote_start(ui: &mut Ui, note: &str) {
 }
 
 pub fn footnote(ui: &mut Ui, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(width_body_space(ui) * 4.0, height_body(ui)),
-        Sense::hover(),
-    );
-    ui.painter().text(
-        rect.right_top(),
-        egui::Align2::RIGHT_TOP,
-        format!("{text}."),
-        TextStyle::Small.resolve(ui.style()),
-        ui.visuals().strong_text_color(),
-    );
+    // Markdowntown patch: поле метки расширяется под длинную метку (`[^note]`) —
+    // в оригинале оно фиксированной ширины, и метка вылезала влево за край.
+    let font = TextStyle::Small.resolve(ui.style());
+    let label = format!("{text}.");
+    let color = ui.visuals().strong_text_color();
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label, font, color));
+    let width = (width_body_space(ui) * 4.0).max(galley.size().x + width_body_space(ui));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height_body(ui)), Sense::hover());
+    let pos = egui::pos2(rect.right() - width_body_space(ui) * 0.5 - galley.size().x, rect.top());
+    ui.painter().galley(pos, galley, color);
 }
 
 fn height_body(ui: &Ui) -> f32 {

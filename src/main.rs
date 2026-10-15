@@ -14,6 +14,9 @@ mod settings;
 mod style;
 mod viewer;
 
+#[cfg(test)]
+mod perf_tests;
+
 fn main() -> eframe::Result {
     let data_dir = data_dir::resolve();
     let options = eframe::NativeOptions {

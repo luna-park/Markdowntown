@@ -37,12 +37,18 @@ cargo fmt             # форматирование
   (BOM, CRLF/LF), `version()` — ключ для кэшей. Чтение/запись с сохранением формата,
   атомарная запись. После правки `text` вызывать `mark_edited()`. `disk_change()` —
   изменён ли файл другой программой; `reload()`, `accept_disk_state()`, `recovered()`.
-- `src/segment.rs` — `split()`: документ → сегменты Markdown / Mermaid (только блоки верхнего
-  уровня) с байтовыми диапазонами и номерами строк.
-- `src/preview.rs` — `Preview`: кэш сегментов по `Document::version()`, рендер Markdown через
-  `egui_commonmark` (`show_mut` — чекбоксы task-list пишут в исходник), mermaid-блоки через
-  `DiagramService` с debounce и показом предыдущей версии. Размер текста превью —
-  `PREVIEW_BODY_SIZE` (14 pt), код — 0.9 от него; цвета текста — как у GitHub.
+- `src/segment.rs` — `split()`: документ → сегменты, по одному на блок верхнего уровня
+  (Markdown) или ```` ```mermaid ```` верхнего уровня, с байтовыми диапазонами и номерами
+  строк. У Markdown-сегмента `appendix` — невидимый хвост с определениями ссылок и сносок
+  из других блоков, чтобы поблочный рендер их находил.
+- `src/preview.rs` — `Preview`: поблочный рендер — каждый Markdown-блок отдельным вызовом
+  `egui_commonmark` (`render_until` скрывает `appendix`); невидимые блоки с подтверждённой
+  высотой не рисуются, а занимают место (кэш высот по тексту, ширине и масштабу) — кадр
+  на 200 КБ ~2 мс. Mermaid-блоки — через `DiagramService` с debounce. Якоря синхронной
+  прокрутки — верх каждого блока. Размер текста — `PREVIEW_BODY_SIZE` (14 pt), код — 0.9
+  от него; цвета текста — как у GitHub.
+- `src/perf_tests.rs` — замеры кадра без окна (`cargo test --release perf -- --ignored
+  --nocapture`) и тест точности пропуска невидимых блоков.
 - `src/style.rs` — общий вид: размеры шрифтов интерфейса (`apply_global`, 14 pt вместо 12.5),
   цвет текста для чтения (`reading_text_color`, `apply_reading_colors`), шрифт редактора
   по умолчанию и допустимый диапазон.
@@ -86,8 +92,8 @@ cargo fmt             # форматирование
 (картинки по URL; HTTP через `ureq` + rustls, без OpenSSL).
 
 `egui_commonmark` и `egui_commonmark_backend` подменены пропатченными копиями из `vendor/`
-через `[patch.crates-io]`: размеры заголовков H1–H6 как на GitHub; позиции блоков верхнего
-уровня для синхронной прокрутки (`CommonMarkCache::block_positions`). Подробности и порядок обновления —
+через `[patch.crates-io]`: размеры заголовков H1–H6 как на GitHub, `render_until` для
+поблочного рендера, ширина метки сноски. Подробности и порядок обновления —
 [vendor/README.md](vendor/README.md). При обновлении `egui_commonmark` проверять, что патч
 применился: `cargo tree -i egui_commonmark` и `cargo tree -i egui_commonmark_backend`
 должны показывать пути `vendor/...`.

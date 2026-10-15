@@ -1,5 +1,7 @@
 //! Панель превью: рендер сегментов документа.
 
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, Instant};
 
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -49,6 +51,11 @@ pub struct Preview {
     shown: Vec<Option<DiagramKey>>,
     /// Открытое окно просмотра диаграммы крупно.
     viewer: Option<DiagramViewer>,
+    /// Высоты отрисованных Markdown-блоков (с отступом после блока) по ключу
+    /// [`block_key`]: невидимые блоки не рисуются, а занимают запомненное место.
+    heights: HashMap<u64, BlockHeight>,
+    /// Номер кадра — чтобы подтверждать высоту замерами из разных кадров.
+    frame: u64,
 }
 
 impl Preview {
@@ -61,6 +68,7 @@ impl Preview {
         scroll_to: Option<f32>,
     ) -> PreviewGeometry {
         apply_preview_style(ui);
+        self.frame += 1;
         let ctx = ui.ctx().clone();
         let diagrams = self
             .diagrams
@@ -103,52 +111,90 @@ impl Preview {
         if let Some(offset) = scroll_to {
             scroll = scroll.vertical_scroll_offset(offset);
         }
-        let output =
-            scroll.show(ui, |ui| {
-                let content_top = ui.min_rect().top();
-                for (i, seg) in self.segments.iter().enumerate() {
-                    let edited = ui
-                        .push_id(i, |ui| match &seg.kind {
-                            SegmentKind::Markdown => {
-                                let edited = show_markdown(
+        // Отступ между блоками — как пустая строка между абзацами.
+        let block_gap = ui.text_style_height(&egui::TextStyle::Body);
+        let scale_bits = ctx.pixels_per_point().to_bits();
+        if self.heights.len() > 100_000 {
+            // Ключи старых версий блоков копятся при наборе — изредка сбрасываем.
+            self.heights.clear();
+        }
+
+        let output = scroll.show_viewport(ui, |ui, viewport| {
+            let content_top = ui.min_rect().top();
+            let width = ui.available_width();
+            let item_spacing = ui.spacing().item_spacing.y;
+            for (i, seg) in self.segments.iter().enumerate() {
+                let top = ui.cursor().top() - content_top;
+                anchors.push((seg.range.start, top));
+                match &seg.kind {
+                    SegmentKind::Markdown { appendix } => {
+                        let block = &doc.text[seg.range.clone()];
+                        let key = block_key(block, appendix, width, scale_bits);
+                        if let Some(&BlockHeight {
+                            height,
+                            stable: true,
+                            ..
+                        }) = self.heights.get(&key)
+                            && (top + height < viewport.min.y || top > viewport.max.y)
+                        {
+                            // Невидимый блок: занять его место, не раскладывая текст.
+                            ui.allocate_space(egui::vec2(width, (height - item_spacing).max(0.0)));
+                            continue;
+                        }
+                        let edited = ui
+                            .push_id(i, |ui| {
+                                show_markdown(
                                     ui,
                                     &mut self.md_cache,
                                     image_base.as_deref(),
                                     doc,
                                     seg,
-                                );
-                                anchors.extend(self.md_cache.block_positions().iter().map(
-                                    |&(offset, y)| (seg.range.start + offset, y - content_top),
-                                ));
-                                edited
-                            }
-                            SegmentKind::Mermaid { source } => {
-                                anchors.push((seg.range.start, ui.cursor().top() - content_top));
-                                if self.shown.len() <= mermaid_index {
-                                    self.shown.resize(mermaid_index + 1, None);
-                                }
-                                let clicked = show_mermaid(
+                                    appendix,
+                                )
+                            })
+                            .inner;
+                        if edited {
+                            // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
+                            ctx.request_repaint();
+                            break;
+                        }
+                        ui.add_space(block_gap);
+                        let height = ui.cursor().top() - content_top - top;
+                        let frame = self.frame;
+                        let entry = self.heights.entry(key).or_insert(BlockHeight {
+                            height,
+                            frame,
+                            stable: false,
+                        });
+                        if entry.frame != frame {
+                            entry.stable = (entry.height - height).abs() < 0.5;
+                            entry.height = height;
+                            entry.frame = frame;
+                        }
+                    }
+                    SegmentKind::Mermaid { source } => {
+                        if self.shown.len() <= mermaid_index {
+                            self.shown.resize(mermaid_index + 1, None);
+                        }
+                        let clicked = ui
+                            .push_id(i, |ui| {
+                                show_mermaid(
                                     ui,
                                     diagrams,
                                     &mut self.shown[mermaid_index],
                                     source,
                                     &diagram_params,
-                                );
-                                if clicked {
-                                    self.viewer = Some(DiagramViewer::new(source));
-                                }
-                                mermaid_index += 1;
-                                false
-                            }
-                        })
-                        .inner;
-                    if edited {
-                        // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
-                        ctx.request_repaint();
-                        break;
+                                )
+                            })
+                            .inner;
+                        if clicked {
+                            self.viewer = Some(DiagramViewer::new(source));
+                        }
+                        mermaid_index += 1;
                     }
                 }
-            });
+            }
+        });
 
         if let Some(viewer) = &mut self.viewer
             && !viewer.show(&ctx, diagrams, diagram_params.theme)
@@ -166,6 +212,17 @@ impl Preview {
             content_height: output.content_size.y,
         }
     }
+}
+
+/// Запомненная высота блока. Пропускать блок можно, только когда высота подтверждена
+/// одинаковыми замерами в двух разных кадрах: таблицы (`Grid`) и картинки устанавливают
+/// свой размер не с первого кадра. Одинаковые блоки делят запись, поэтому замер
+/// в том же кадре не считается подтверждением.
+#[derive(Clone, Copy)]
+struct BlockHeight {
+    height: f32,
+    frame: u64,
+    stable: bool,
 }
 
 struct DiagramParams {
@@ -269,7 +326,19 @@ fn show_diagram_image(
         .inner
 }
 
-/// Рендерит Markdown-сегмент. Возвращает `true`, если превью изменило документ
+/// Ключ кэша высоты Markdown-блока: от текста (с невидимым хвостом), ширины и масштаба
+/// зависит раскладка.
+fn block_key(block: &str, appendix: &str, width: f32, scale_bits: u32) -> u64 {
+    let mut h = DefaultHasher::new();
+    block.hash(&mut h);
+    appendix.hash(&mut h);
+    width.to_bits().hash(&mut h);
+    scale_bits.hash(&mut h);
+    h.finish()
+}
+
+/// Рендерит Markdown-блок. `appendix` — невидимый хвост (определения ссылок и сносок
+/// из других блоков). Возвращает `true`, если превью изменило документ
 /// (переключили чекбокс task-list).
 fn show_markdown(
     ui: &mut egui::Ui,
@@ -277,15 +346,21 @@ fn show_markdown(
     image_base: Option<&str>,
     doc: &mut Document,
     seg: &Segment,
+    appendix: &str,
 ) -> bool {
-    let mut viewer = CommonMarkViewer::new();
+    let block_len = seg.range.len();
+    let mut viewer = CommonMarkViewer::new().render_until(block_len);
     if let Some(base) = image_base {
         viewer = viewer.default_implicit_uri_scheme(base);
     }
-    let mut text = doc.text[seg.range.clone()].to_owned();
+    let mut text = String::with_capacity(block_len + appendix.len());
+    text.push_str(&doc.text[seg.range.clone()]);
+    text.push_str(appendix);
     let response = viewer.show_mut(ui, cache, &mut text);
     if response.response.changed() {
-        doc.text.replace_range(seg.range.clone(), &text);
+        // Чекбокс меняет «[ ]» на «[x]» — длина блока прежняя, хвост не трогается.
+        doc.text
+            .replace_range(seg.range.clone(), &text[..text.len() - appendix.len()]);
         doc.mark_edited();
         return true;
     }

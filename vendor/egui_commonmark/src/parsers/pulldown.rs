@@ -112,29 +112,6 @@ impl CommonMarkViewerInternal {
     }
 }
 
-/// Markdowntown patch: байтовые смещения начал блоков верхнего уровня (по возрастанию).
-fn top_level_block_starts(text: &str, options: pulldown_cmark::Options) -> Vec<usize> {
-    let mut starts = Vec::new();
-    let mut depth = 0usize;
-    for (event, range) in pulldown_cmark::Parser::new_ext(text, options).into_offset_iter() {
-        match event {
-            pulldown_cmark::Event::Start(_) => {
-                if depth == 0 {
-                    starts.push(range.start);
-                }
-                depth += 1;
-            }
-            pulldown_cmark::Event::End(_) => depth = depth.saturating_sub(1),
-            // Блоки без вложенности (линия, HTML) — тоже границы.
-            pulldown_cmark::Event::Rule | pulldown_cmark::Event::Html(_) if depth == 0 => {
-                starts.push(range.start);
-            }
-            _ => {}
-        }
-    }
-    starts
-}
-
 fn parser_options_extras(
     is_math_enabled: bool,
     is_scroll_to_heading_enabled: bool,
@@ -176,34 +153,20 @@ impl CommonMarkViewerInternal {
             .enumerate()
             .peekable();
 
-            // Markdowntown patch: запоминаем позиции блоков верхнего уровня.
-            // `process_event` сам забирает часть событий (таблицы, HTML), поэтому
-            // начала блоков считаем отдельным проходом, а не глубиной в этом цикле.
-            let top_level = top_level_block_starts(
-                text,
-                parser_options_extras(options.math_fn.is_some(), options.enable_scroll_to_heading),
-            );
-            let mut next_top_level = 0;
-            cache.clear_block_positions();
-
+            // Markdowntown patch: `render_until` — хвост текста не рисуется, а его
+            // начало считается концом документа (без завершающего перевода строки).
+            let hidden = |span: &std::ops::Range<usize>| {
+                options.render_until.is_some_and(|end| span.start >= end)
+            };
             while let Some((index, (e, src_span))) = events.next() {
-                let start_position = ui.next_widget_position();
-                if matches!(e, pulldown_cmark::Event::Start(_)) {
-                    while top_level
-                        .get(next_top_level)
-                        .is_some_and(|&start| start < src_span.start)
-                    {
-                        next_top_level += 1;
-                    }
-                    if top_level.get(next_top_level) == Some(&src_span.start) {
-                        cache.push_block_position(src_span.start, start_position.y);
-                        next_top_level += 1;
-                    }
+                if hidden(&src_span) {
+                    break;
                 }
+                let start_position = ui.next_widget_position();
                 let is_element_end = matches!(e, pulldown_cmark::Event::End(_));
                 let should_add_split_point = self.list.is_inside_a_list() && is_element_end;
 
-                if events.peek().is_none() {
+                if events.peek().is_none_or(|(_, (_, span))| hidden(span)) {
                     self.line.should_end_newline_forced = false;
                 }
 
@@ -667,7 +630,11 @@ impl CommonMarkViewerInternal {
 
                 // Headings should always insert a newline even if it is at the start.
                 // Whether this is okay in all scenarios is a different question.
-                newline(ui);
+                // Markdowntown patch: кроме самого первого элемента — превью рисует
+                // каждый блок отдельно, и отступ перед блоком задаёт само.
+                if !self.line.should_not_start_newline_forced {
+                    newline(ui);
+                }
                 self.text_style.heading = Some(match level {
                     HeadingLevel::H1 => 0,
                     HeadingLevel::H2 => 1,

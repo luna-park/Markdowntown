@@ -1,27 +1,35 @@
-//! Разбиение документа на сегменты: обычный Markdown и блоки ```` ```mermaid ````.
+//! Разбиение документа на сегменты для превью: каждый блок верхнего уровня
+//! (абзац, заголовок, список, таблица, цитата, …) — отдельный Markdown-сегмент,
+//! блок ```` ```mermaid ```` — сегмент-диаграмма.
 //!
-//! Markdown-сегменты рендерит `egui_commonmark`, mermaid — наш код. Отделяются только
-//! блоки верхнего уровня: mermaid внутри списка или цитаты остаётся частью Markdown,
-//! иначе разрезанный контейнер отрисовался бы неверно.
+//! Поблочный рендер нужен, чтобы не рисовать невидимые блоки. Связи между блоками
+//! сохраняются через `appendix`: к тексту блока при рендере дописываются определения
+//! ссылок (`[ref]: url`) и сносок, на которые он ссылается, — они разбираются вместе
+//! с блоком, но не отображаются.
 //!
-//! Ограничение: ссылки-сноски и reference-ссылки не видят определений из других
-//! сегментов (каждый сегмент разбирается отдельно).
+//! Mermaid внутри списка или цитаты остаётся частью своего блока (обычный код).
 
+use std::collections::HashMap;
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentKind {
-    Markdown,
-    Mermaid { source: String },
+    /// `appendix` — невидимый хвост для рендера (определения ссылок и сносок).
+    Markdown {
+        appendix: String,
+    },
+    Mermaid {
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
     /// Байтовый диапазон в исходном тексте.
     pub range: Range<usize>,
-    /// Номер первой строки (с 0) — для синхронной прокрутки.
+    /// Номер первой строки (с 0).
     pub first_line: usize,
     pub kind: SegmentKind,
 }
@@ -41,79 +49,149 @@ fn is_mermaid(info: &str) -> bool {
         .is_some_and(|lang| lang.eq_ignore_ascii_case("mermaid"))
 }
 
-pub fn split(text: &str) -> Vec<Segment> {
-    // Диапазоны и исходники mermaid-блоков верхнего уровня.
-    let mut blocks: Vec<(Range<usize>, String)> = Vec::new();
-    let mut depth = 0usize;
-    let mut current: Option<(Range<usize>, String)> = None;
+enum Block {
+    Markdown,
+    Mermaid(String),
+}
 
-    for (event, range) in Parser::new_ext(text, parser_options()).into_offset_iter() {
+pub fn split(text: &str) -> Vec<Segment> {
+    let mut blocks: Vec<(Range<usize>, Block)> = Vec::new();
+    // Определения сносок верхнего уровня: метка → диапазон.
+    let mut footnotes: HashMap<String, Range<usize>> = HashMap::new();
+    let mut depth = 0usize;
+    let mut current: Option<(usize, Block)> = None;
+
+    let mut events = Parser::new_ext(text, parser_options()).into_offset_iter();
+    for (event, range) in events.by_ref() {
         match event {
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
-                if depth == 0 && is_mermaid(&info) =>
-            {
-                current = Some((range, String::new()));
+            Event::Start(tag) => {
+                if depth == 0 {
+                    let block = match &tag {
+                        Tag::CodeBlock(CodeBlockKind::Fenced(info)) if is_mermaid(info) => {
+                            Block::Mermaid(String::new())
+                        }
+                        Tag::FootnoteDefinition(label) => {
+                            footnotes.insert(label.to_string(), range.clone());
+                            Block::Markdown
+                        }
+                        _ => Block::Markdown,
+                    };
+                    current = Some((range.start, block));
+                }
                 depth += 1;
             }
-            Event::Text(t) => {
-                if let Some((_, src)) = current.as_mut() {
-                    src.push_str(&t);
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0
+                    && let Some((start, block)) = current.take()
+                {
+                    blocks.push((start..range.end, block));
                 }
             }
-            Event::End(TagEnd::CodeBlock) if current.is_some() && depth == 1 => {
-                blocks.extend(current.take());
-                depth -= 1;
+            Event::Text(t) => {
+                if depth == 1
+                    && let Some((_, Block::Mermaid(source))) = current.as_mut()
+                {
+                    source.push_str(&t);
+                }
             }
-            Event::Start(_) => depth += 1,
-            Event::End(_) => depth = depth.saturating_sub(1),
+            // Блоки без вложенности.
+            Event::Rule | Event::Html(_) if depth == 0 => {
+                blocks.push((range, Block::Markdown));
+            }
             _ => {}
         }
     }
+    // Определения ссылок событий не дают — берём их исходный текст.
+    let link_defs: String = events
+        .reference_definitions()
+        .iter()
+        .map(|(_, def)| text[def.span.clone()].trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    let mut segments = Vec::with_capacity(blocks.len() * 2 + 1);
-    let mut pos = 0;
-    let push_markdown = |segments: &mut Vec<Segment>, range: Range<usize>| {
-        let chunk = &text[range.clone()];
-        if !chunk.trim().is_empty() {
-            // Строка первого непустого символа, а не хвоста предыдущего блока.
-            let content_start = range.start + (chunk.len() - chunk.trim_start().len());
-            segments.push(Segment {
-                first_line: line_of(text, content_start),
-                range,
-                kind: SegmentKind::Markdown,
-            });
-        }
-    };
-    for (range, source) in blocks {
-        push_markdown(&mut segments, pos..range.start);
-        pos = range.end;
-        segments.push(Segment {
-            first_line: line_of(text, range.start),
-            range,
-            kind: SegmentKind::Mermaid { source },
-        });
+    // pulldown-cmark иногда даёт блоку диапазон, захватывающий следующий блок
+    // (список определений + абзац после него) — обрезаем по началу следующего.
+    for i in 1..blocks.len() {
+        let next_start = blocks[i].0.start;
+        let prev = &mut blocks[i - 1].0;
+        prev.end = prev.end.min(next_start).max(prev.start);
     }
-    push_markdown(&mut segments, pos..text.len());
-    segments
+
+    // Номера строк — одним проходом: блоки идут по возрастанию смещений.
+    let mut line = 0;
+    let mut counted_to = 0;
+    blocks
+        .into_iter()
+        .map(|(range, block)| {
+            line += count_newlines(&text.as_bytes()[counted_to..range.start]);
+            counted_to = range.start;
+            let kind = match block {
+                Block::Mermaid(source) => SegmentKind::Mermaid { source },
+                Block::Markdown => SegmentKind::Markdown {
+                    appendix: appendix(text, &range, &link_defs, &footnotes),
+                },
+            };
+            Segment {
+                first_line: line,
+                range,
+                kind,
+            }
+        })
+        .collect()
 }
 
-fn line_of(text: &str, offset: usize) -> usize {
-    text.as_bytes()[..offset]
-        .iter()
-        .filter(|&&b| b == b'\n')
-        .count()
+/// Невидимый хвост блока: все определения ссылок (если блок может на них ссылаться)
+/// и определения сносок, на которые блок ссылается, если они вне блока.
+fn appendix(
+    text: &str,
+    block: &Range<usize>,
+    link_defs: &str,
+    footnotes: &HashMap<String, Range<usize>>,
+) -> String {
+    let body = &text[block.clone()];
+    let mut parts: Vec<&str> = Vec::new();
+    if !link_defs.is_empty() && body.contains(']') {
+        parts.push(link_defs);
+    }
+    for label in footnote_refs(body) {
+        if let Some(def) = footnotes.get(label)
+            && !(block.start <= def.start && def.end <= block.end)
+        {
+            parts.push(text[def.clone()].trim_end());
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}\n", parts.join("\n\n"))
+    }
+}
+
+/// Метки сносок `[^label]` в тексте (возможны лишние кандидаты — это безвредно).
+fn footnote_refs(text: &str) -> impl Iterator<Item = &str> {
+    text.match_indices("[^").filter_map(|(i, _)| {
+        let rest = &text[i + 2..];
+        let end = rest.find(']')?;
+        let label = &rest[..end];
+        (!label.is_empty() && !label.contains(char::is_whitespace)).then_some(label)
+    })
+}
+
+fn count_newlines(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|&&b| b == b'\n').count()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn kinds(text: &str) -> Vec<(&str, usize)> {
+    fn kinds(text: &str) -> Vec<(&'static str, usize)> {
         split(text)
             .into_iter()
             .map(|s| {
                 let k = match s.kind {
-                    SegmentKind::Markdown => "md",
+                    SegmentKind::Markdown { .. } => "md",
                     SegmentKind::Mermaid { .. } => "mermaid",
                 };
                 (k, s.first_line)
@@ -121,11 +199,22 @@ mod tests {
             .collect()
     }
 
+    fn appendix_of(text: &str, index: usize) -> String {
+        match &split(text)[index].kind {
+            SegmentKind::Markdown { appendix } => appendix.clone(),
+            SegmentKind::Mermaid { .. } => panic!("not markdown"),
+        }
+    }
+
     #[test]
-    fn plain_markdown_is_one_segment() {
-        let segs = split("# T\n\ntext\n");
-        assert_eq!(segs.len(), 1);
-        assert_eq!(segs[0].range, 0..10);
+    fn every_top_level_block_is_a_segment() {
+        let text = "# T\n\ntext\nmore\n\n- a\n- b\n\n---\n\n| x |\n|---|\n| 1 |\n";
+        assert_eq!(
+            kinds(text),
+            [("md", 0), ("md", 2), ("md", 5), ("md", 8), ("md", 10)]
+        );
+        let segs = split(text);
+        assert_eq!(&text[segs[1].range.clone()], "text\nmore\n");
     }
 
     #[test]
@@ -149,11 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn mermaid_only() {
-        assert_eq!(kinds("```mermaid\npie\n```\n"), [("mermaid", 0)]);
-    }
-
-    #[test]
     fn info_string_variants() {
         assert_eq!(kinds("~~~Mermaid title\npie\n~~~\n"), [("mermaid", 0)]);
         assert_eq!(kinds("```rust\nfn main() {}\n```\n"), [("md", 0)]);
@@ -161,9 +245,9 @@ mod tests {
     }
 
     #[test]
-    fn nested_mermaid_stays_markdown() {
+    fn nested_mermaid_stays_in_its_block() {
         let text = "- item\n\n  ```mermaid\n  pie\n  ```\n\n> ```mermaid\n> pie\n> ```\n";
-        assert_eq!(kinds(text), [("md", 0)]);
+        assert_eq!(kinds(text), [("md", 0), ("md", 6)]);
     }
 
     #[test]
@@ -173,21 +257,48 @@ mod tests {
     }
 
     #[test]
-    fn segments_cover_text_in_order() {
-        let text = "x\n```mermaid\npie\n```\ny\n```mermaid\npie\n```\n";
+    fn segments_are_ordered_and_on_char_boundaries() {
+        let text = "Привет\n\n```mermaid\ngraph TD\n  А-->Б\n```\nПока\n\n> цитата\n";
         let segs = split(text);
-        assert_eq!(segs.len(), 4);
         for w in segs.windows(2) {
             assert!(w[0].range.end <= w[1].range.start);
+        }
+        for s in &segs {
+            assert!(text.is_char_boundary(s.range.start));
+            assert!(text.is_char_boundary(s.range.end));
         }
     }
 
     #[test]
-    fn cyrillic_offsets_are_char_boundaries() {
-        let text = "Привет\n\n```mermaid\ngraph TD\n  А-->Б\n```\nПока\n";
-        for s in split(text) {
-            assert!(text.is_char_boundary(s.range.start));
-            assert!(text.is_char_boundary(s.range.end));
-        }
+    fn appendix_carries_link_and_footnote_definitions() {
+        let text = "See [docs][d] and a note[^n].\n\nOther text.\n\n[d]: https://example.com\n\n[^n]: The note.\n";
+        // Первый блок ссылается и на ссылку, и на сноску.
+        let a = appendix_of(text, 0);
+        assert!(a.contains("[d]: https://example.com"), "{a:?}");
+        assert!(a.contains("[^n]: The note."), "{a:?}");
+        // Блок без ссылок — без хвоста.
+        assert_eq!(appendix_of(text, 1), "");
+        // Определение сноски не дублируется в своём же блоке.
+        assert!(!appendix_of(text, 2).contains("[^n]"));
+    }
+
+    #[test]
+    fn overlapping_block_ranges_are_trimmed() {
+        // У списка определений pulldown-cmark захватывает и абзац после него.
+        let text = "Term
+: Def.
+
+Paragraph after.
+";
+        let segs = split(text);
+        assert_eq!(segs.len(), 2);
+        assert!(segs[0].range.end <= segs[1].range.start);
+        assert!(!text[segs[0].range.clone()].contains("Paragraph"));
+    }
+
+    #[test]
+    fn footnote_ref_scanner() {
+        let refs: Vec<_> = footnote_refs("a[^1] b[^note] c[^ bad] d[^]").collect();
+        assert_eq!(refs, ["1", "note"]);
     }
 }

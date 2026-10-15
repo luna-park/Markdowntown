@@ -232,6 +232,13 @@ impl<'f> CommonMarkViewer<'f> {
         self
     }
 
+    /// Markdowntown patch: отображать только начало текста до байта `end`; остальное
+    /// разбирается (определения сносок и ссылок), но не рисуется.
+    pub fn render_until(mut self, end: usize) -> Self {
+        self.options.render_until = Some(end);
+        self
+    }
+
     /// Shows rendered markdown
     pub fn show(
         self,
