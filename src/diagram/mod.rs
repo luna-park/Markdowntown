@@ -22,7 +22,31 @@ impl DiagramTheme {
     }
 }
 
+/// Токен отмены задания рендера: клонируется, `cancel()` видна всем копиям.
+#[derive(Clone, Debug)]
+pub struct RenderControl(merman::OperationControl);
+
+impl RenderControl {
+    pub fn new() -> Self {
+        Self(merman::OperationControl::new())
+    }
+
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
+
 /// Движок Mermaid → SVG. SVG должен быть пригоден для `resvg` (без `<foreignObject>`).
 pub trait DiagramRenderer: Send {
-    fn render_svg(&self, source: &str, theme: DiagramTheme) -> Result<String, String>;
+    /// Должен прерываться, если `control` отменён (тогда ошибка не показывается).
+    fn render_svg(
+        &self,
+        source: &str,
+        theme: DiagramTheme,
+        control: &RenderControl,
+    ) -> Result<String, String>;
 }

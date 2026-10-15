@@ -206,7 +206,7 @@ pub fn encode(text: &str, format: FileFormat) -> Vec<u8> {
 /// Пишет во временный файл рядом и переименовывает: при сбое старый файл не портится.
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".mdview-tmp");
+    tmp.push(".markdowntown-tmp");
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path).inspect_err(|_| {
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn save_and_load_preserve_format() {
-        let dir = std::env::temp_dir().join(format!("mdview-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("markdowntown-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("doc.md");
         let original = b"\xEF\xBB\xBF# T\r\n\r\ntext\r\n";

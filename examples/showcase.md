@@ -120,7 +120,7 @@ Term
 
 Local SVG (path relative to this file):
 
-![mdview logo](images/logo.svg)
+![Markdowntown logo](images/logo.svg)
 
 Remote image:
 

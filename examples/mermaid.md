@@ -92,7 +92,7 @@ erDiagram
 
 ```mermaid
 gantt
-    title План mdview
+    title План Markdowntown
     dateFormat YYYY-MM-DD
     section Основа
     Каркас          :done, a1, 2026-10-01, 5d
@@ -117,7 +117,7 @@ pie title Время на задачи
 
 ```mermaid
 mindmap
-  root((mdview))
+  root((Markdowntown))
     Editor
       Highlighting
       Search
@@ -132,7 +132,7 @@ mindmap
 
 ```mermaid
 timeline
-    title mdview history
+    title Markdowntown history
     2026-10 : Skeleton : Research
     2026-11 : Mermaid : Editor
     2026-12 : Release 1.0

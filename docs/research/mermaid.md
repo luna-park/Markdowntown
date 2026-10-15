@@ -2,7 +2,7 @@
 
 Дата: 2026-10-15. Стенд: [experiments/mermaid/](../../experiments/mermaid/) (сравнение
 рендереров, `src/bin/probe.rs` — углублённые проверки merman),
-[experiments/size-probe/](../../experiments/size-probe/) (копия mdview + merman для замера размера exe).
+[experiments/size-probe/](../../experiments/size-probe/) (копия mdview (прежнее имя проекта) + merman для замера размера exe).
 
 ## Вопрос
 
@@ -94,7 +94,7 @@ Release, LTO + `codegen-units = 1` + `strip`, статический CRT:
 
 | Сборка | Размер | Прирост |
 |---|---|---|
-| mdview (eframe + egui_commonmark + rfd) | 10.7 МБ | — |
+| Markdowntown (eframe + egui_commonmark + rfd) | 10.7 МБ | — |
 | + merman (все диаграммы, `complete-svg`) + resvg | 28.2 МБ | +17.5 МБ |
 | + merman (11 основных диаграмм, только `svg`) + resvg | 21.0 МБ | +10.3 МБ |
 
@@ -104,7 +104,7 @@ Release, LTO + `codegen-units = 1` + `strip`, статический CRT:
 |---|---|
 | `merman_render` | 6.1 МБ |
 | `merman_core` | 3.8 МБ |
-| `naga`, `wgpu_core`, `wgpu_hal` (уже есть в mdview) | 3.2 МБ |
+| `naga`, `wgpu_core`, `wgpu_hal` (уже есть в Markdowntown) | 3.2 МБ |
 | `dugong` (раскладка), `ratex_parser`/`ratex_layout` (формулы), `vello_cpu`, `manatee` | ~1.4 МБ |
 | `usvg`, `resvg`, `tiny_skia`, `skrifa`, `harfrust` (SVG и текст) | ~1.8 МБ |
 

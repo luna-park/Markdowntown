@@ -7,6 +7,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
 use crate::document::Document;
 use crate::segment::{self, Segment, SegmentKind};
+use crate::viewer::DiagramViewer;
 
 /// Пауза в наборе, после которой перерисовываются диаграммы.
 const DIAGRAM_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -24,6 +25,8 @@ pub struct Preview {
     /// Последняя успешно показанная диаграмма для каждого mermaid-блока (по порядку) —
     /// её показываем, пока рендерится новая версия.
     shown: Vec<Option<DiagramKey>>,
+    /// Открытое окно просмотра диаграммы крупно.
+    viewer: Option<DiagramViewer>,
 }
 
 impl Preview {
@@ -73,13 +76,16 @@ impl Preview {
                         if self.shown.len() <= mermaid_index {
                             self.shown.resize(mermaid_index + 1, None);
                         }
-                        show_mermaid(
+                        let clicked = show_mermaid(
                             ui,
                             diagrams,
                             &mut self.shown[mermaid_index],
                             source,
                             &diagram_params,
                         );
+                        if clicked {
+                            self.viewer = Some(DiagramViewer::new(source));
+                        }
                         mermaid_index += 1;
                         false
                     }
@@ -91,6 +97,14 @@ impl Preview {
                 break;
             }
         }
+
+        if let Some(viewer) = &mut self.viewer
+            && !viewer.show(&ctx, diagrams, diagram_params.theme)
+        {
+            self.viewer = None;
+        }
+        // После всех запросов кадра: отменить задания, которые больше не нужны.
+        diagrams.end_frame();
     }
 }
 
@@ -117,22 +131,27 @@ impl From<DiagramState<'_>> for Diagram {
     }
 }
 
+/// Возвращает `true`, если по диаграмме кликнули (открыть крупно).
 fn show_mermaid(
     ui: &mut egui::Ui,
     diagrams: &mut DiagramService,
     shown: &mut Option<DiagramKey>,
     source: &str,
     params: &DiagramParams,
-) {
+) -> bool {
     let key = DiagramKey::new(source, params.theme, params.scale);
     let current: Diagram = diagrams.get(key, source, params.may_request).into();
     let previous: Option<Diagram> = shown
         .filter(|prev| *prev != key)
         .map(|prev| diagrams.peek(prev).into());
 
+    let mut clicked = false;
     match current {
         Diagram::Ready(texture, size) => {
-            show_diagram_image(ui, &texture, size, false);
+            let response = show_diagram_image(ui, &texture, size, false)
+                .on_hover_cursor(egui::CursorIcon::ZoomIn)
+                .on_hover_text("Click to enlarge");
+            clicked = response.clicked();
             *shown = Some(key);
         }
         Diagram::Failed(error) => {
@@ -150,7 +169,9 @@ fn show_mermaid(
             });
         }
         Diagram::Pending => match &previous {
-            Some(Diagram::Ready(texture, size)) => show_diagram_image(ui, texture, *size, true),
+            Some(Diagram::Ready(texture, size)) => {
+                show_diagram_image(ui, texture, *size, true);
+            }
             _ => {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -163,6 +184,7 @@ fn show_mermaid(
         },
     }
     ui.add_space(8.0);
+    clicked
 }
 
 /// Диаграмма по центру; шире панели — уменьшается. `stale` — приглушённая
@@ -172,7 +194,7 @@ fn show_diagram_image(
     texture: &egui::TextureHandle,
     size: egui::Vec2,
     stale: bool,
-) {
+) -> egui::Response {
     let available = ui.available_width();
     let size = if size.x > available {
         size * (available / size.x)
@@ -183,7 +205,8 @@ fn show_diagram_image(
     if stale {
         image = image.tint(egui::Color32::from_white_alpha(110));
     }
-    ui.vertical_centered(|ui| ui.add(image));
+    ui.vertical_centered(|ui| ui.add(image.sense(egui::Sense::click())))
+        .inner
 }
 
 /// Рендерит Markdown-сегмент. Возвращает `true`, если превью изменило документ

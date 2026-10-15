@@ -1,4 +1,4 @@
-# mdview
+# Markdowntown
 
 Десктопный редактор Markdown-файлов с панелью живого превью отрендеренного текста.
 Цель — поддержка основных элементов Markdown (CommonMark + таблицы) и диаграмм Mermaid.
@@ -6,6 +6,8 @@
 - Язык: Rust (edition 2024, toolchain 1.99+)
 - GUI: `egui` / `eframe` 0.36.2 (бэкенд wgpu)
 - Целевая платформа: Windows (кроссплатформенность — позже, не ломать без нужды)
+- Имя: «Markdowntown» в UI и документации, `markdowntown` — пакет и exe. Прежнее имя —
+  mdview: так пока называется папка репозитория и стенды в `experiments/`.
 
 ## Команды
 
@@ -32,9 +34,14 @@ cargo fmt             # форматирование
   `DiagramService` с debounce и показом предыдущей версии.
 - `src/diagram/` — рендер Mermaid:
   - `mod.rs` — трейт `DiagramRenderer`, `DiagramTheme`;
-  - `merman_backend.rs` — реализация на `merman` (по `Renderer` на тему);
+  - `merman_backend.rs` — реализация на `merman` (по `Renderer` на тему; своя палитра для
+    тёмной темы — `dark_config()`; лимит 10 с на диаграмму);
   - `raster.rs` — SVG → `egui::ColorImage` через `resvg` (системные шрифты, лимит 8192 px);
-  - `service.rs` — `DiagramService`: фоновый поток, кэш текстур по `DiagramKey`.
+  - `service.rs` — `DiagramService`: фоновый поток, кэш текстур по `DiagramKey`. Протокол кадра:
+    `begin_frame` → `get`/`peek` для всех нужных диаграмм → `end_frame` (отменяет задания,
+    не запрошенные через `get` в этом кадре).
+- `src/viewer.rs` — `DiagramViewer`: окно просмотра диаграммы крупно (масштаб вокруг точки,
+  прокрутка, перетаскивание, растр повышенной плотности при увеличении).
 - `examples/showcase.md` — все поддерживаемые элементы Markdown, `examples/mermaid.md` —
   все проверенные типы диаграмм (`cargo run -- examples/<файл>.md`).
 
@@ -101,7 +108,7 @@ cargo fmt             # форматирование
 - **Размер exe:** до ~100 МБ приемлемо. Приоритет — функционал; минимизация размера —
   желательна, но вторична (не отказываться от возможностей ради мегабайт).
 - **Каталог данных** (настройки, недавние файлы, черновики): `data\` рядом с exe; если туда
-  нельзя писать — `%APPDATA%\mdview`. Для eframe задавать `NativeOptions::persistence_path`,
+  нельзя писать — `%APPDATA%\Markdowntown`. Для eframe задавать `NativeOptions::persistence_path`,
   не полагаться на путь по умолчанию.
 - **Экспорт:** только HTML.
 - **Проверки — локальные**, CI на внешнем хостинге нет.

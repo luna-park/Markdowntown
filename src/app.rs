@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::document::Document;
 use crate::preview::Preview;
 
-const WELCOME: &str = r#"# mdview
+const WELCOME: &str = r#"# Markdowntown
 
 A simple **Markdown** editor with a live _preview_.
 
@@ -17,13 +17,13 @@ graph TD
 ```
 "#;
 
-pub struct MdViewApp {
+pub struct MarkdowntownApp {
     doc: Document,
     preview: Preview,
     status: String,
 }
 
-impl MdViewApp {
+impl MarkdowntownApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let mut app = Self {
             doc: Document::new_untitled(WELCOME),
@@ -79,7 +79,7 @@ impl MdViewApp {
 
     fn window_title(&self) -> String {
         let dirty = if self.doc.is_dirty() { "• " } else { "" };
-        format!("{dirty}{} — mdview", self.doc.display_name())
+        format!("{dirty}{} — Markdowntown", self.doc.display_name())
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
@@ -99,7 +99,7 @@ impl MdViewApp {
     }
 }
 
-impl eframe::App for MdViewApp {
+impl eframe::App for MarkdowntownApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_shortcuts(&ctx);
