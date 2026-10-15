@@ -12,6 +12,29 @@ use crate::viewer::DiagramViewer;
 /// Пауза в наборе, после которой перерисовываются диаграммы.
 const DIAGRAM_DEBOUNCE: Duration = Duration::from_millis(500);
 
+/// Размер основного текста превью, pt. Остальные стили (код, мелкий текст)
+/// масштабируются пропорционально, заголовки считаются от него в `egui_commonmark`.
+const PREVIEW_BODY_SIZE: f32 = 14.0;
+
+/// Увеличивает шрифты в `ui` превью (не затрагивая редактор и меню).
+fn apply_preview_text_scale(ui: &mut egui::Ui) {
+    let styles = &mut ui.style_mut().text_styles;
+    let Some(body) = styles.get(&egui::TextStyle::Body).map(|f| f.size) else {
+        return;
+    };
+    let factor = PREVIEW_BODY_SIZE / body;
+    for style in [
+        egui::TextStyle::Body,
+        egui::TextStyle::Monospace,
+        egui::TextStyle::Small,
+        egui::TextStyle::Button,
+    ] {
+        if let Some(font) = styles.get_mut(&style) {
+            font.size *= factor;
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Preview {
     md_cache: CommonMarkCache,
@@ -31,6 +54,7 @@ pub struct Preview {
 
 impl Preview {
     pub fn show(&mut self, ui: &mut egui::Ui, doc: &mut Document) {
+        apply_preview_text_scale(ui);
         let ctx = ui.ctx().clone();
         let diagrams = self
             .diagrams

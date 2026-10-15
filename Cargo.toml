@@ -18,3 +18,7 @@ serde_json = "1.0.154"
 # Зависимости без полной отладочной информации: debug-сборка в разы меньше на диске.
 [profile.dev.package."*"]
 debug = false
+
+# Пропатченная копия бэкенда egui_commonmark (размеры заголовков) — см. vendor/README.md.
+[patch.crates-io]
+egui_commonmark_backend = { path = "vendor/egui_commonmark_backend" }

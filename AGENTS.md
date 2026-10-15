@@ -31,7 +31,8 @@ cargo fmt             # форматирование
   уровня) с байтовыми диапазонами и номерами строк.
 - `src/preview.rs` — `Preview`: кэш сегментов по `Document::version()`, рендер Markdown через
   `egui_commonmark` (`show_mut` — чекбоксы task-list пишут в исходник), mermaid-блоки через
-  `DiagramService` с debounce и показом предыдущей версии.
+  `DiagramService` с debounce и показом предыдущей версии. Размер текста превью —
+  `PREVIEW_BODY_SIZE` (14 pt); код и мелкий текст масштабируются пропорционально.
 - `src/diagram/` — рендер Mermaid:
   - `mod.rs` — трейт `DiagramRenderer`, `DiagramTheme`;
   - `merman_backend.rs` — реализация на `merman` (по `Renderer` на тему; своя палитра для
@@ -61,6 +62,11 @@ cargo fmt             # форматирование
 
 `egui_commonmark` подключён с features `better_syntax_highlighting`, `svg`, `fetch`
 (картинки по URL; HTTP через `ureq` + rustls, без OpenSSL).
+
+`egui_commonmark_backend` подменён пропатченной копией из `vendor/` через `[patch.crates-io]`
+(размеры заголовков H1–H6 как на GitHub). Подробности и порядок обновления —
+[vendor/README.md](vendor/README.md). При обновлении `egui_commonmark` проверять, что патч
+применился: `cargo tree -i egui_commonmark_backend` должен показывать путь `vendor/...`.
 
 В `[profile.dev.package."*"]` у зависимостей отключена отладочная информация —
 иначе debug-сборка занимает несколько ГБ.
