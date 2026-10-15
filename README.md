@@ -5,6 +5,7 @@ A Markdown editor for Windows with a live preview and Mermaid diagrams.
 - Editor with Markdown syntax highlighting, line numbers, find and replace
 - Live preview: GitHub-flavored Markdown (tables, task lists, footnotes, alerts),
   syntax-highlighted code, local and remote images
+- Math formulas: `$…$` inline and `$$…$$` on their own line (LaTeX, rendered like KaTeX)
 - Mermaid diagrams rendered right in the preview — no browser or Node.js needed
 - Synchronized scrolling between the editor and the preview
 - Outline panel: jump to any heading in the editor and the preview

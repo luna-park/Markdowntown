@@ -31,6 +31,13 @@ impl Rasterizer {
         }
     }
 
+    /// Без системных шрифтов — для SVG, где весь текст уже контурами (формулы).
+    pub fn without_fonts() -> Self {
+        Self {
+            options: usvg::Options::default(),
+        }
+    }
+
     /// `scale` — пикселей на точку (`pixels_per_point`), чтобы на HiDPI было чётко.
     pub fn rasterize(&self, svg: &str, scale: f32) -> Result<Rasterized, String> {
         let tree = usvg::Tree::from_str(svg, &self.options).map_err(|e| e.to_string())?;

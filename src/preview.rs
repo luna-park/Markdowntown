@@ -1,13 +1,16 @@
 //! Панель превью: рендер сегментов документа.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
 use crate::document::Document;
+use crate::math::MathCache;
 use crate::scroll_sync::PreviewGeometry;
 use crate::segment::{self, Segment, SegmentKind};
 use crate::style;
@@ -56,6 +59,8 @@ pub struct Preview {
     heights: HashMap<u64, BlockHeight>,
     /// Номер кадра — чтобы подтверждать высоту замерами из разных кадров.
     frame: u64,
+    /// Общий с `render_math_fn`: `egui_commonmark` требует `'static` замыкание.
+    math: Rc<RefCell<MathCache>>,
 }
 
 impl Preview {
@@ -69,6 +74,11 @@ impl Preview {
     ) -> PreviewGeometry {
         apply_preview_style(ui);
         self.frame += 1;
+        self.math.borrow_mut().begin_frame();
+        let math = Rc::clone(&self.math);
+        let math_fn = move |ui: &mut egui::Ui, tex: &str, inline: bool| {
+            math.borrow_mut().show(ui, tex, inline);
+        };
         let ctx = ui.ctx().clone();
         let diagrams = self
             .diagrams
@@ -146,6 +156,7 @@ impl Preview {
                                 show_markdown(
                                     ui,
                                     &mut self.md_cache,
+                                    &math_fn,
                                     image_base.as_deref(),
                                     doc,
                                     seg,
@@ -343,13 +354,16 @@ fn block_key(block: &str, appendix: &str, width: f32, scale_bits: u32) -> u64 {
 fn show_markdown(
     ui: &mut egui::Ui,
     cache: &mut CommonMarkCache,
+    math_fn: &egui_commonmark::RenderMathFn,
     image_base: Option<&str>,
     doc: &mut Document,
     seg: &Segment,
     appendix: &str,
 ) -> bool {
     let block_len = seg.range.len();
-    let mut viewer = CommonMarkViewer::new().render_until(block_len);
+    let mut viewer = CommonMarkViewer::new()
+        .render_until(block_len)
+        .render_math_fn(Some(math_fn));
     if let Some(base) = image_base {
         viewer = viewer.default_implicit_uri_scheme(base);
     }

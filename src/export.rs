@@ -173,6 +173,12 @@ impl Exporter<'_> {
                 }
                 Event::End(TagEnd::HtmlBlock) => out.push(Event::Html("</pre>\n".into())),
                 Event::Html(t) | Event::InlineHtml(t) => out.push(Event::Text(t)),
+                Event::InlineMath(tex) => {
+                    out.push(Event::InlineHtml(math_html(&tex, false).into()))
+                }
+                Event::DisplayMath(tex) => {
+                    out.push(Event::InlineHtml(math_html(&tex, true).into()))
+                }
                 Event::Start(Tag::Image {
                     link_type,
                     dest_url,
@@ -283,6 +289,38 @@ impl Exporter<'_> {
     }
 }
 
+/// Формула — встроенный SVG. Размеры в em и цвет `currentColor`: формула следует размеру
+/// и цвету текста вокруг (в том числе теме страницы). Ошибка — исходник с подсказкой.
+fn math_html(tex: &str, display: bool) -> String {
+    let formula = match crate::math::render(tex, display, crate::math::MATH_SCALE, [0, 0, 0]) {
+        Ok(f) => f,
+        Err(e) => {
+            let source = if display {
+                format!("$${tex}$$")
+            } else {
+                format!("${tex}$")
+            };
+            return format!(
+                "<code class=\"math-error\" title=\"{}\">{}</code>",
+                escape(&e),
+                escape(&source)
+            );
+        }
+    };
+    let svg = formula.svg.replace("rgba(0,0,0,1)", "currentColor");
+    let style = format!(
+        "width:{:.4}em;height:{:.4}em;vertical-align:-{:.4}em",
+        formula.width, formula.height, formula.depth
+    );
+    let svg = svg.replacen("<svg", &format!("<svg style=\"{style}\" role=\"img\""), 1);
+    let label = escape(tex);
+    if display {
+        format!("<span class=\"math-display\" aria-label=\"{label}\">{svg}</span>")
+    } else {
+        format!("<span class=\"math-inline\" aria-label=\"{label}\">{svg}</span>")
+    }
+}
+
 /// Проставляет заголовкам `id` в стиле GitHub (`#my-section`), чтобы работали ссылки
 /// внутри документа. Возвращает текст первого заголовка — для `<title>`.
 fn add_heading_ids(events: &mut [Event<'_>]) -> Option<String> {
@@ -358,7 +396,7 @@ fn svg_data_uri(svg: &str) -> String {
 
 /// merman задаёт корню `width="100%"` (и `max-width` в стиле) — внутри `<img>` у такого
 /// SVG нет собственного размера. Ставим `width`/`height` из `viewBox`.
-fn with_intrinsic_size(svg: &str) -> String {
+pub(crate) fn with_intrinsic_size(svg: &str) -> String {
     let Some(start) = svg.find("<svg") else {
         return svg.to_owned();
     };
@@ -525,6 +563,9 @@ img { max-width: 100%; }
 figure.mermaid { text-align: center; }
 figure.mermaid img { height: auto; }
 .mermaid-error p { color: var(--caution); font-weight: 600; }
+.math-display { display: block; margin: 16px 0; text-align: center; overflow-x: auto; }
+.math-inline svg, .math-display svg { overflow: visible; }
+.math-error { color: var(--caution); }
 dt { font-weight: 600; } dd { margin: 0 0 8px 2em; }
 .footnote-definition { font-size: .875em; color: var(--muted); }
 .footnote-definition p { display: inline; }
@@ -669,6 +710,22 @@ mod tests {
         assert!(out.html.contains("src=\"missing.png\""));
         assert!(out.html.contains("src=\"https://example.com/x.png\""));
         assert_eq!(out.missing_images, 1);
+    }
+
+    #[test]
+    fn math_is_embedded_as_svg() {
+        let out = export("Inline $x^2$ and\n\n$$\\frac{a}{b}$$\n\nbad $\\frac{1}$ end\n");
+        assert!(
+            out.html
+                .contains("<span class=\"math-inline\" aria-label=\"x^2\"><svg")
+        );
+        assert!(out.html.contains("<span class=\"math-display\""));
+        assert!(out.html.contains("currentColor"));
+        assert!(!out.html.contains("rgba(0,0,0,1)"));
+        assert!(out.html.contains("class=\"math-error\""));
+        // Цены — не формулы.
+        let prices = export("It costs $5 and $10.\n");
+        assert!(!prices.html.contains("class=\"math-inline\""));
     }
 
     #[test]

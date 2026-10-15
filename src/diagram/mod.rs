@@ -5,6 +5,7 @@ mod raster;
 mod service;
 
 pub use merman_backend::MermanRenderer;
+pub use raster::Rasterizer;
 pub use service::{DiagramKey, DiagramService, DiagramState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

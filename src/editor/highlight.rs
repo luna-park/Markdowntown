@@ -82,6 +82,7 @@ fn parser_options() -> Options {
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_MATH
 }
 
 /// Флаги для каждого байта текста.
@@ -113,7 +114,9 @@ fn classify(text: &str) -> Vec<u16> {
                 }
             }
             Event::Text(_) => mark(range, CONTENT),
-            Event::Code(_) => mark(range, CONTENT | CODE),
+            Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_) => {
+                mark(range, CONTENT | CODE)
+            }
             Event::TaskListMarker(_) => mark(range, TASK),
             Event::Html(_) | Event::InlineHtml(_) => mark(range, HTML),
             _ => {}

@@ -41,6 +41,7 @@ pub(crate) fn parser_options() -> Options {
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_MATH
 }
 
 pub(crate) fn is_mermaid(info: &str) -> bool {

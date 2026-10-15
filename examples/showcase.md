@@ -116,6 +116,23 @@ Text with a footnote[^1] and another one[^note].
 Term
 : Definition of the term.
 
+## Math
+
+Inline: the area of a circle is $S = \pi r^2$, and $e^{i\pi} + 1 = 0$ in the middle of a line.
+
+Display:
+
+$$
+\int_0^1 x^2\,dx = \frac{1}{3}, \qquad \sum_{k=1}^{n} k = \frac{n(n+1)}{2}
+$$
+
+$$
+\begin{pmatrix} a & b \\ c & d \end{pmatrix}^{-1}
+= \frac{1}{ad - bc} \begin{pmatrix} d & -b \\ -c & a \end{pmatrix}
+$$
+
+Prices are not formulas: it costs $5 and $10. An error is shown as source: $\frac{1}$.
+
 ## Images
 
 Local SVG (path relative to this file):
