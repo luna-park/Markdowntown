@@ -146,13 +146,14 @@ sequenceDiagram
     Preview-->>Editor: rendered
 ```
 
-Mermaid inside a list stays a regular code block:
+A diagram right after a list:
 
 - Item
 
 ```mermaid
-  pie
-      "A" : 1
-  ```
+pie
+    "A" : 1
+    "B" : 2
+```
 
 The end.
