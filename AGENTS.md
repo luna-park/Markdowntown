@@ -18,13 +18,23 @@ cargo clippy          # линтер
 cargo fmt             # форматирование
 .\check.ps1           # все проверки перед коммитом: fmt, clippy -D warnings, test, build
 .\check.ps1 -Release  # + release-сборка и размер exe; -Perf — замеры кадра
+.\package.ps1         # check.ps1 + release + проверка DLL + лицензии → dist\*.zip
 ```
+
+`package.ps1` требует `cargo-about` (`cargo install cargo-about --locked --features cli`).
+Иконка: исходник `assets/icon.svg`, файлы `icon.ico` / `icon-256.png` генерируются
+`cargo test generate_icon_files -- --ignored` и коммитятся.
 
 Журнал — `data\markdowntown.log` рядом с exe (для `cargo run` — `target\debug\data\`),
 перезаписывается при каждом запуске; уровень — `RUST_LOG`.
 
 ## Структура
 
+- `build.rs` — ресурсы exe (иконка, сведения о версии) через `winresource` (нужен `rc.exe`
+  из Windows SDK).
+- `assets/` — иконка; `licenses/` — лицензии, которые `cargo-about` не находит сам
+  (шрифты KaTeX внутри `ratex-katex-fonts`); `about.toml` / `about.hbs` — допустимые
+  лицензии зависимостей и шаблон `THIRD_PARTY_LICENSES.html`.
 - `src/main.rs` — точка входа, настройки окна (`NativeOptions`), путь persistence
   (`<каталог данных>pp.ron`), `run_native`.
 - `src/data_dir.rs` — каталог данных: `data\` рядом с exe или `%APPDATA%\Markdowntown`.

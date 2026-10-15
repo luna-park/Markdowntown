@@ -1,7 +1,9 @@
 [package]
 name = "markdowntown"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "Markdown editor with live preview and Mermaid diagrams"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 eframe = { version = "0.36.2", features = ["persistence"] }
@@ -9,7 +11,7 @@ egui = "0.36.2"
 egui_commonmark = { version = "0.25.0", features = ["better_syntax_highlighting", "svg", "fetch"] }
 egui_extras = { version = "0.36.2", features = ["svg_text"] }
 env_logger = { version = "0.11.11", default-features = false, features = ["humantime"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 log = "0.4.34"
 merman = { version = "=0.9.0", default-features = false, features = ["all-diagrams", "complete-svg"] }
 pulldown-cmark = { version = "0.13", default-features = false }
@@ -17,6 +19,13 @@ resvg = "0.45"
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+
+# Portable-релиз: меньше exe. `panic = "abort"` не включаем: паника в потоке рендера
+# диаграмм должна ронять только его, а не всё приложение с несохранённым текстом.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
 
 # Зависимости без полной отладочной информации: debug-сборка в разы меньше на диске.
 [profile.dev.package."*"]
@@ -26,3 +35,6 @@ debug = false
 [patch.crates-io]
 egui_commonmark_backend = { path = "vendor/egui_commonmark_backend" }
 egui_commonmark = { path = "vendor/egui_commonmark" }
+
+[build-dependencies]
+winresource = "0.1.34"

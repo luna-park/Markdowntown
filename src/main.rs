@@ -16,7 +16,21 @@ mod style;
 mod viewer;
 
 #[cfg(test)]
+mod assets_tests;
+#[cfg(test)]
 mod perf_tests;
+
+/// Иконка окна (заголовок, Alt+Tab). Иконка самого exe — в ресурсах (`build.rs`).
+fn window_icon() -> egui::IconData {
+    let image = image::load_from_memory(include_bytes!("../assets/icon-256.png"))
+        .expect("embedded icon is a valid PNG")
+        .into_rgba8();
+    egui::IconData {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    }
+}
 
 fn main() -> eframe::Result {
     let data_dir = data_dir::resolve();
@@ -24,6 +38,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Markdowntown")
+            .with_icon(window_icon())
             .with_inner_size([1200.0, 800.0])
             // Не меньше суммы минимальных ширин редактора и превью (см. app.rs).
             .with_min_inner_size([520.0, 360.0]),

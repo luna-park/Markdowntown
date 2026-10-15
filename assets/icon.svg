@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <!-- «M» -->
+  <polyline points="46,186 46,74 92,132 138,74 138,186" fill="none" stroke="#ffffff"
+            stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Стрелка вниз -->
+  <line x1="196" y1="74" x2="196" y2="150" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+  <polygon points="160,140 232,140 196,192" fill="#ffffff" stroke="#ffffff" stroke-width="8" stroke-linejoin="round"/>
+</svg>

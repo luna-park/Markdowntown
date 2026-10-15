@@ -4,3 +4,6 @@
 experiments/**/target/
 experiments/**/node_modules/
 experiments/**/out/
+
+# Релизные архивы (package.ps1)
+/dist/

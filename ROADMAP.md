@@ -142,16 +142,19 @@
 
 ## Фаза 6. Релиз под Windows
 
-- [ ] **1.0** Иконка приложения и метаданные exe (`winres` / `embed-resource`)
-- [ ] **1.0** Release-профиль: `lto`, `codegen-units = 1`, `strip` (сейчас exe 45 МБ без них;
-      на стенде LTO + strip давали ~−35%)
-- [ ] **1.0** Все ресурсы вшиты в exe; проверить зависимости exe (`dumpbin /dependents`) —
-      только системные DLL Windows
-- [ ] **1.0** Portable-архив: `markdowntown.exe` + README (в т.ч. про предупреждение SmartScreen
-      для неподписанного exe)
-- [ ] **1.0** Проверка на чистой Windows 10/11 (Windows Sandbox): распаковать → запустить → работать,
-      без интернета и без Node
-- [ ] **1.0** Версия 1.0
+- [x] **1.0** Иконка приложения (`assets/icon.svg` → `icon.ico`, иконка окна) и метаданные exe
+      (версия, описание, лицензия) через `winresource` в `build.rs`
+- [x] **1.0** Release-профиль: `lto = "fat"`, `codegen-units = 1`, `strip` — exe 43.4 МБ
+      (без них 45 МБ; основной вес — код `merman`), zip 17.4 МБ
+- [x] **1.0** Все ресурсы вшиты в exe; зависимости exe — только системные DLL Windows
+      (проверяется в `package.ps1` через `dumpbin /dependents`)
+- [x] **1.0** Portable-архив `dist\Markdowntown-<версия>-windows-x64.zip` (`package.ps1`):
+      exe, README (в т.ч. про SmartScreen), лицензии MIT / Apache-2.0,
+      `THIRD_PARTY_LICENSES.html` (`cargo-about`), лицензия шрифтов KaTeX
+- [ ] **1.0** Проверка на чистой Windows 10/11 (Windows Sandbox / VM без GPU): распаковать →
+      запустить → работать, без интернета и без Node _(проверено: распакованный архив
+      запускается на этой машине, `data\` создаётся рядом с exe)_
+- [x] **1.0** Версия 1.0.0 (`Cargo.toml`, ресурсы exe)
 - [ ] Экспорт в HTML (стили + встроенные SVG-диаграммы; PDF — через печать в браузере)
 - [ ] Ассоциация с `.md` — кнопка в настройках (запись в HKCU, без прав администратора) и её отмена
 - [ ] Подпись кода (снимает предупреждение SmartScreen)
