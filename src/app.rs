@@ -1,21 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::document::{DiskChange, Document};
-use crate::editor::Editor;
+use crate::diagram::DiagramService;
+use crate::document::Document;
 use crate::fonts;
-use crate::outline::Outline;
-use crate::preview::Preview;
+use crate::links::{self, Target};
 use crate::recovery::{Draft, Drafts};
-use crate::scroll_sync::ScrollSync;
 use crate::settings::{self, Settings, Theme, ViewMode};
+use crate::tab::{DiskEvent, Tab};
 
 const WELCOME: &str = r#"# Markdowntown
 
 A simple **Markdown** editor with a live _preview_.
 
 - Open a file with **Ctrl+O** (or drop it on the window), save with **Ctrl+S**
+- Each file opens in its own tab: close with **Ctrl+W**, switch with **Ctrl+Tab**
 - Format with **Ctrl+B**, *Ctrl+I*, `Ctrl+E`, links with Ctrl+K
 - Find with Ctrl+F, replace with Ctrl+H
 - Zoom the whole UI with Ctrl+Plus / Ctrl+Minus
@@ -35,14 +35,6 @@ pub const APP_TITLE: &str = concat!("Markdowntown v", env!("CARGO_PKG_VERSION"))
 const MIN_EDITOR_WIDTH: f32 = 200.0;
 /// Минимальная ширина превью, px: его нельзя сжать разделителем до нуля.
 const MIN_PREVIEW_WIDTH: f32 = 280.0;
-/// Как часто проверять, не изменили ли файл другие программы.
-const DISK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-/// Как часто (не чаще) записывать черновик несохранённых правок.
-const DRAFT_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Текущий раздел оглавления определяется на такой глубине от верха панели, px —
-/// больше зазора над заголовком после перехода (8 px), чтобы раздел был «своим».
-const SECTION_PROBE: f32 = 16.0;
 
 /// Допустимая ширина панели редактора при ширине окна `window_width`: превью остаётся
 /// не уже `MIN_PREVIEW_WIDTH`. В очень узком окне обе панели делят его поровну.
@@ -55,31 +47,34 @@ fn editor_width_range(window_width: f32) -> egui::Rangef {
     }
 }
 
-/// Действие, при котором текущий документ заменяется или закрывается.
+/// Действие с вкладками; закрытие при несохранённых правках сначала спрашивает.
 #[derive(Debug, Clone)]
 enum Action {
     New,
     /// `None` — выбрать файл в диалоге.
     Open(Option<PathBuf>),
+    /// Закрыть вкладки с этими id; про вкладки с правками — по одному вопросу.
+    Close(Vec<u64>),
     Exit,
 }
 
 enum Dialog {
-    /// Несохранённые правки перед действием.
+    /// Несохранённые правки в активной вкладке перед действием.
     Unsaved(Action),
-    /// Файл изменён другой программой, а в редакторе есть свои правки.
+    /// Файл активной вкладки изменён другой программой, а в ней есть свои правки.
     ExternalChange,
     /// Найден черновик после аварийного завершения.
     Recover(Draft),
 }
 
 pub struct MarkdowntownApp {
-    doc: Document,
-    editor: Editor,
-    preview: Preview,
-    scroll_sync: ScrollSync,
-    /// Прокрутка панелей от синхронизации, вычисленная в прошлом кадре.
-    pending_scroll: (Option<f32>, Option<f32>),
+    /// Всегда хотя бы одна вкладка.
+    tabs: Vec<Tab>,
+    active: usize,
+    next_tab_id: u64,
+    /// Общий для всех вкладок: фоновый поток рендера и шрифты.
+    diagrams: DiagramService,
+
     /// Доля ширины окна под редактор: сохраняется при изменении размера окна,
     /// обновляется, когда пользователь двигает разделитель.
     editor_ratio: f32,
@@ -95,19 +90,12 @@ pub struct MarkdowntownApp {
     recovered: Vec<Draft>,
     /// Закрытие окна подтверждено — больше не перехватывать.
     allow_close: bool,
+    /// Идёт выход: по очереди спрашиваем про каждую вкладку с правками.
+    exiting: bool,
+    /// Вкладки, правки которых при выходе решили не сохранять.
+    exit_discarded: Vec<u64>,
 
     drafts: Option<Drafts>,
-    /// Версия документа и путь, для которых записан последний черновик.
-    draft_written: Option<((u64, u64), Option<PathBuf>)>,
-    last_draft_time: Instant,
-    last_disk_check: Instant,
-    outline: Outline,
-    /// Байт документа в верхней строке ведущей панели (прошлый кадр) — текущий раздел.
-    top_byte: usize,
-    /// Переход по оглавлению: превью прокручивается к этому байту после раскладки.
-    outline_jump: Option<usize>,
-    /// Сколько кадров уже длится переход (страховка от бесконечной подстройки).
-    outline_jump_frames: u32,
     /// Идущий экспорт в HTML: итог (сообщение для статуса) придёт из фонового потока.
     export: Option<mpsc::Receiver<String>>,
 }
@@ -127,20 +115,14 @@ impl MarkdowntownApp {
         ctx.set_theme(settings.theme.preference());
         fonts::install(ctx, settings.editor_font.as_deref());
 
-        let mut editor = Editor::default();
-        editor.font_size = settings.editor_font_size;
-        let mut scroll_sync = ScrollSync::default();
-        scroll_sync.enabled = settings.sync_scroll;
-
         let drafts = data_dir.as_deref().map(Drafts::new);
         let recovered = drafts.as_ref().map(Drafts::list).unwrap_or_default();
 
         let mut app = Self {
-            doc: Document::new_untitled(WELCOME),
-            editor,
-            preview: Preview::default(),
-            scroll_sync,
-            pending_scroll: (None, None),
+            tabs: Vec::new(),
+            active: 0,
+            next_tab_id: 1,
+            diagrams: DiagramService::new(ctx),
             editor_ratio: settings.editor_ratio,
             last_window_width: 0.0,
             status: String::new(),
@@ -149,18 +131,18 @@ impl MarkdowntownApp {
             dialog: None,
             recovered,
             allow_close: false,
+            exiting: false,
+            exit_discarded: Vec::new(),
             drafts,
-            draft_written: None,
-            last_draft_time: Instant::now(),
-            last_disk_check: Instant::now(),
             export: None,
-            outline: Outline::default(),
-            top_byte: 0,
-            outline_jump: None,
-            outline_jump_frames: 0,
         };
+        app.restore_session();
         if let Some(path) = std::env::args_os().nth(1) {
-            app.load(Path::new(&path));
+            app.open_path(Path::new(&path));
+        }
+        if app.tabs.is_empty() {
+            // Первый запуск или пустой сеанс — приветствие.
+            app.push_tab(Document::new_untitled(WELCOME));
         }
         if data_dir.is_none() {
             app.set_status("No writable data folder: settings and recovery are disabled".into());
@@ -168,22 +150,125 @@ impl MarkdowntownApp {
         app
     }
 
-    // ----- Документ и файлы -----
+    // ----- Вкладки -----
 
-    /// Выполнить действие; если есть несохранённые правки — сначала спросить.
-    fn request(&mut self, action: Action) {
-        if self.doc.is_dirty() {
-            self.dialog = Some(Dialog::Unsaved(action));
+    fn tab(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
+
+    fn new_tab_id(&mut self) -> u64 {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        id
+    }
+
+    /// Новая вкладка с документом становится активной.
+    fn push_tab(&mut self, doc: Document) {
+        let id = self.new_tab_id();
+        self.tabs.push(Tab::new(id, doc));
+        self.activate(self.tabs.len() - 1);
+    }
+
+    /// Открыть документ: в активной вкладке, если она пустая безымянная, иначе в новой.
+    fn put_document(&mut self, doc: Document) {
+        if !self.tabs.is_empty() && self.tab().is_pristine() {
+            let id = self.new_tab_id();
+            self.tabs[self.active] = Tab::new(id, doc);
         } else {
-            self.perform(action);
+            self.push_tab(doc);
         }
     }
 
-    fn perform(&mut self, action: Action) {
+    fn activate(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.active = index;
+            // Пока вкладка была в фоне, файл могли изменить — проверить сразу.
+            self.tabs[index].check_disk_soon();
+        }
+    }
+
+    fn index_of(&self, id: u64) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// Закрывает вкладку без вопросов (правки сохранены или отброшены).
+    fn close_tab(&mut self, id: u64) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let mut tab = self.tabs.remove(index);
+        if let Some(drafts) = &self.drafts {
+            tab.discard_draft(drafts);
+        }
+        if self.tabs.is_empty() {
+            self.push_tab(Document::new_untitled(""));
+        } else if index < self.active || self.active >= self.tabs.len() {
+            self.activate(self.active.saturating_sub(1));
+        } else {
+            self.activate(self.active);
+        }
+    }
+
+    /// Соседняя вкладка (`step` = 1 / −1), по кругу.
+    fn cycle_tab(&mut self, step: isize) {
+        let n = self.tabs.len() as isize;
+        let next = (self.active as isize + step).rem_euclid(n);
+        self.activate(next as usize);
+    }
+
+    // ----- Сеанс -----
+
+    /// Открывает файлы прошлого сеанса; отсутствующие пропускаются.
+    fn restore_session(&mut self) {
+        let session = self.settings.session.clone();
+        let mut active = None;
+        for (i, path) in session.iter().enumerate() {
+            match Document::load(path) {
+                Ok(doc) => {
+                    self.push_tab(doc);
+                    if i == self.settings.session_active {
+                        active = Some(self.tabs.len() - 1);
+                    }
+                }
+                Err(e) => log::info!("session: skipping {}: {e}", path.display()),
+            }
+        }
+        if let Some(index) = active {
+            self.activate(index);
+        } else if !self.tabs.is_empty() {
+            self.activate(0);
+        }
+        if !self.tabs.is_empty() {
+            log::info!("session: restored {} tab(s)", self.tabs.len());
+        }
+    }
+
+    /// Файлы открытых вкладок — в настройки (сохраняются eframe периодически и при выходе).
+    fn save_session(&mut self) {
+        let mut session = Vec::new();
+        let mut active = 0;
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if let Some(path) = tab.doc.path() {
+                if i == self.active {
+                    active = session.len();
+                }
+                session.push(path.to_owned());
+            }
+        }
+        self.settings.session = session;
+        self.settings.session_active = active;
+    }
+
+    // ----- Документ и файлы -----
+
+    fn request(&mut self, action: Action) {
         match action {
             Action::New => {
-                self.discard_draft();
-                self.doc = Document::new_untitled("");
+                self.push_tab(Document::new_untitled(""));
                 self.set_status("New document".into());
             }
             Action::Open(None) => {
@@ -192,26 +277,90 @@ impl MarkdowntownApp {
                     .add_filter("All files", &["*"])
                     .pick_file()
                 {
-                    self.discard_draft();
-                    self.load(&path);
+                    self.open_path(&path);
                 }
             }
-            Action::Open(Some(path)) => {
-                self.discard_draft();
-                self.load(&path);
+            Action::Open(Some(path)) => self.open_path(&path),
+            Action::Close(mut ids) => {
+                // Без правок — закрыть сразу; с правками — спросить про первую,
+                // остальные ждут ответа (Cancel оставляет их открытыми).
+                ids.retain(|&id| self.index_of(id).is_some());
+                let (dirty, clean): (Vec<u64>, Vec<u64>) = ids.into_iter().partition(|&id| {
+                    self.index_of(id)
+                        .is_some_and(|i| self.tabs[i].doc.is_dirty())
+                });
+                for id in clean {
+                    self.close_tab(id);
+                }
+                if let Some(index) = dirty.first().and_then(|&id| self.index_of(id)) {
+                    self.activate(index);
+                    self.dialog = Some(Dialog::Unsaved(Action::Close(dirty)));
+                }
             }
-            Action::Exit => {
-                self.discard_draft();
-                self.allow_close = true;
-            }
+            Action::Exit => self.continue_exit(),
         }
     }
 
-    fn load(&mut self, path: &Path) {
+    /// Выход: спросить про следующую вкладку с правками или закрыть окно.
+    fn continue_exit(&mut self) {
+        self.exiting = true;
+        let next = self
+            .tabs
+            .iter()
+            .position(|t| t.doc.is_dirty() && !self.exit_discarded.contains(&t.id));
+        if let Some(index) = next {
+            self.activate(index);
+            self.dialog = Some(Dialog::Unsaved(Action::Exit));
+            return;
+        }
+        if let Some(drafts) = &self.drafts {
+            for tab in &mut self.tabs {
+                tab.discard_draft(drafts);
+            }
+        }
+        self.allow_close = true;
+    }
+
+    fn cancel_exit(&mut self) {
+        self.exiting = false;
+        self.exit_discarded.clear();
+    }
+
+    /// Вопрос о несохранённых правках решён: `saved` — сохранили, иначе отбросили.
+    fn resolve_unsaved(&mut self, action: Action, saved: bool) {
+        match action {
+            Action::Close(ids) => {
+                // Первая в списке — та, о которой спрашивали; дальше — остальные.
+                if let Some((&id, rest)) = ids.split_first() {
+                    self.close_tab(id);
+                    self.request(Action::Close(rest.to_vec()));
+                }
+            }
+            Action::Exit => {
+                if !saved {
+                    let id = self.tab().id;
+                    if let Some(drafts) = &self.drafts {
+                        self.tabs[self.active].discard_draft(drafts);
+                    }
+                    self.exit_discarded.push(id);
+                }
+                self.continue_exit();
+            }
+            other => self.request(other),
+        }
+    }
+
+    /// Открывает файл; если он уже открыт — переключается на его вкладку.
+    fn open_path(&mut self, path: &Path) {
+        if let Some(index) = self.tabs.iter().position(|t| t.has_path(path)) {
+            self.activate(index);
+            self.settings.add_recent(path);
+            return;
+        }
         match Document::load(path) {
             Ok(doc) => {
                 self.set_status(format!("Opened {}", path.display()));
-                self.doc = doc;
+                self.put_document(doc);
                 self.settings.add_recent(path);
             }
             Err(e) => {
@@ -224,24 +373,41 @@ impl MarkdowntownApp {
     }
 
     fn save(&mut self, save_as: bool) {
-        let result = match (self.doc.path(), save_as) {
-            (Some(_), false) => self.doc.save(),
+        let doc = &mut self.tabs[self.active].doc;
+        let result = match (doc.path(), save_as) {
+            (Some(_), false) => doc.save(),
             _ => {
                 let Some(path) = rfd::FileDialog::new()
                     .add_filter("Markdown", &["md"])
-                    .set_file_name(self.doc.display_name())
+                    .set_file_name(doc.display_name())
                     .save_file()
                 else {
                     return;
                 };
-                self.doc.save_as(&path)
+                // Тот же файл уже открыт в другой вкладке — две вкладки не должны
+                // писать в один файл.
+                if self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .any(|(i, t)| i != self.active && t.has_path(&path))
+                {
+                    self.set_status(format!(
+                        "Cannot save: {} is open in another tab",
+                        path.display()
+                    ));
+                    return;
+                }
+                self.tabs[self.active].doc.save_as(&path)
             }
         };
-        let status = match (result, self.doc.path()) {
+        let status = match (result, self.tab().doc.path()) {
             (Ok(()), Some(path)) => {
                 let path = path.to_owned();
                 self.settings.add_recent(&path);
-                self.discard_draft();
+                if let Some(drafts) = &self.drafts {
+                    self.tabs[self.active].discard_draft(drafts);
+                }
                 format!("Saved {}", path.display())
             }
             (Ok(()), None) => "Saved".to_owned(),
@@ -256,14 +422,15 @@ impl MarkdowntownApp {
         if self.export.is_some() {
             return;
         }
-        let stem = Path::new(&self.doc.display_name()).file_stem().map_or_else(
+        let doc = &self.tab().doc;
+        let stem = Path::new(&doc.display_name()).file_stem().map_or_else(
             || "document".to_owned(),
             |s| s.to_string_lossy().into_owned(),
         );
         let mut dialog = rfd::FileDialog::new()
             .add_filter("HTML", &["html", "htm"])
             .set_file_name(format!("{stem}.html"));
-        if let Some(dir) = self.doc.base_dir() {
+        if let Some(dir) = doc.base_dir() {
             dialog = dialog.set_directory(dir);
         }
         let Some(path) = dialog.save_file() else {
@@ -275,8 +442,8 @@ impl MarkdowntownApp {
             Theme::Light => crate::export::PageTheme::Light,
             Theme::Dark => crate::export::PageTheme::Dark,
         };
-        let text = self.doc.text.clone();
-        let base_dir = self.doc.base_dir().map(Path::to_owned);
+        let text = doc.text.clone();
+        let base_dir = doc.base_dir().map(Path::to_owned);
         let (tx, rx) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("html-export".into())
@@ -331,72 +498,35 @@ impl MarkdowntownApp {
         self.status = message;
     }
 
-    // ----- Черновики восстановления -----
+    // ----- Черновики и диск -----
 
-    /// Пишет черновик, если есть несохранённые правки, которых ещё нет в черновике.
-    fn write_draft(&mut self, ctx: &egui::Context) {
+    /// Черновики несохранённых правок всех вкладок.
+    fn write_drafts(&mut self, ctx: &egui::Context) {
+        // Выход подтверждён (правки сохранены или отброшены, черновики удалены):
+        // не записывать их заново в последнем кадре — иначе при следующем запуске
+        // прошлое закрытие выглядело бы аварийным.
         let Some(drafts) = &self.drafts else {
             return;
         };
-        // Выход подтверждён (правки сохранены или отброшены, черновик уже удалён):
-        // не записывать его заново в последнем кадре — иначе при следующем запуске
-        // прошлое закрытие выглядело бы аварийным.
-        if !self.doc.is_dirty() || self.allow_close {
+        if self.allow_close {
             return;
         }
-        let path = self.doc.path().map(Path::to_owned);
-        let current = (self.doc.version(), path.clone());
-        if self.draft_written.as_ref() == Some(&current) {
-            return;
-        }
-        let elapsed = self.last_draft_time.elapsed();
-        if elapsed < DRAFT_INTERVAL {
-            // Записать, даже если пользователь перестанет печатать.
-            ctx.request_repaint_after(DRAFT_INTERVAL - elapsed);
-            return;
-        }
-        // Сохранили под другим именем — старый черновик больше не нужен.
-        if let Some((_, old_path)) = &self.draft_written
-            && *old_path != path
-        {
-            drafts.remove(old_path.as_deref());
-        }
-        match drafts.save(&Draft::new(path, self.doc.text.clone())) {
-            Ok(()) => self.draft_written = Some(current),
-            Err(e) => log::warn!("cannot write recovery draft: {e}"),
-        }
-        self.last_draft_time = Instant::now();
-    }
-
-    /// Удаляет черновик текущего документа (сохранён или правки отброшены).
-    fn discard_draft(&mut self) {
-        if let Some(drafts) = &self.drafts {
-            if let Some((_, path)) = self.draft_written.take() {
-                drafts.remove(path.as_deref());
+        for tab in &mut self.tabs {
+            if !self.exit_discarded.contains(&tab.id) {
+                tab.write_draft(drafts, ctx);
             }
-            drafts.remove(self.doc.path());
         }
     }
 
-    // ----- Изменения файла на диске -----
-
+    /// Файл активной вкладки на диске (фоновые проверяются при переключении на них).
     fn check_disk(&mut self, ctx: &egui::Context) {
-        ctx.request_repaint_after(DISK_CHECK_INTERVAL);
-        if self.dialog.is_some() || self.last_disk_check.elapsed() < DISK_CHECK_INTERVAL {
+        if self.dialog.is_some() {
             return;
         }
-        self.last_disk_check = Instant::now();
-        match self.doc.disk_change() {
+        match self.tab_mut().check_disk(ctx) {
             None => {}
-            Some(DiskChange::Modified) if !self.doc.is_dirty() => match self.doc.reload() {
-                Ok(()) => self.set_status("Reloaded: the file was changed on disk".into()),
-                Err(e) => self.set_status(format!("Cannot reload: {e}")),
-            },
-            Some(DiskChange::Modified) => self.dialog = Some(Dialog::ExternalChange),
-            Some(DiskChange::Removed) => {
-                self.doc.accept_disk_state();
-                self.set_status("The file was deleted on disk; save to recreate it".into());
-            }
+            Some(DiskEvent::Status(message)) => self.set_status(message),
+            Some(DiskEvent::Conflict) => self.dialog = Some(Dialog::ExternalChange),
         }
     }
 
@@ -411,7 +541,7 @@ impl MarkdowntownApp {
         let Some(dialog) = self.dialog.take() else {
             return;
         };
-        let name = self.doc.display_name();
+        let name = self.tab().doc.display_name();
         let mut keep_open = true;
 
         let response = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
@@ -419,22 +549,27 @@ impl MarkdowntownApp {
             match &dialog {
                 Dialog::Unsaved(action) => {
                     ui.heading("Unsaved changes");
-                    ui.label(format!("Save changes to “{name}” before continuing?"));
+                    ui.label(format!("Save changes to “{name}” before closing?"));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Save").clicked() {
                             self.save(false);
                             // Сохранение отменили в диалоге выбора файла — остаёмся.
-                            if !self.doc.is_dirty() {
-                                self.perform(action.clone());
+                            if !self.tab().doc.is_dirty() {
+                                self.resolve_unsaved(action.clone(), true);
+                            } else if matches!(action, Action::Exit) {
+                                self.cancel_exit();
                             }
                             keep_open = false;
                         }
                         if ui.button("Don't Save").clicked() {
-                            self.perform(action.clone());
+                            self.resolve_unsaved(action.clone(), false);
                             keep_open = false;
                         }
                         if ui.button("Cancel").clicked() {
+                            if matches!(action, Action::Exit) {
+                                self.cancel_exit();
+                            }
                             keep_open = false;
                         }
                     });
@@ -447,9 +582,11 @@ impl MarkdowntownApp {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Reload (discard my changes)").clicked() {
-                            match self.doc.reload() {
+                            match self.tab_mut().doc.reload() {
                                 Ok(()) => {
-                                    self.discard_draft();
+                                    if let Some(drafts) = &self.drafts {
+                                        self.tabs[self.active].discard_draft(drafts);
+                                    }
                                     self.set_status("Reloaded from disk".into());
                                 }
                                 Err(e) => self.set_status(format!("Cannot reload: {e}")),
@@ -457,7 +594,7 @@ impl MarkdowntownApp {
                             keep_open = false;
                         }
                         if ui.button("Keep my version").clicked() {
-                            self.doc.accept_disk_state();
+                            self.tab_mut().doc.accept_disk_state();
                             keep_open = false;
                         }
                     });
@@ -476,15 +613,12 @@ impl MarkdowntownApp {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Recover").clicked() {
-                            self.doc = Document::recovered(draft.path.clone(), draft.text.clone());
-                            // Черновик остаётся до сохранения: следующие записи его обновят.
-                            self.draft_written = Some((self.doc.version(), draft.path.clone()));
-                            self.set_status("Recovered unsaved changes".into());
+                            self.recover(draft);
                             keep_open = false;
                         }
                         if ui.button("Discard").clicked() {
                             if let Some(drafts) = &self.drafts {
-                                drafts.remove(draft.path.as_deref());
+                                drafts.remove(draft.path.as_deref(), draft.untitled);
                             }
                             keep_open = false;
                         }
@@ -496,40 +630,79 @@ impl MarkdowntownApp {
         let dismissed = response.should_close() && keep_open;
         if keep_open && !dismissed {
             self.dialog = Some(dialog);
-        } else if dismissed && let Dialog::ExternalChange = dialog {
-            self.doc.accept_disk_state();
+        } else if dismissed {
+            match dialog {
+                Dialog::ExternalChange => self.tab_mut().doc.accept_disk_state(),
+                Dialog::Unsaved(Action::Exit) => self.cancel_exit(),
+                _ => {}
+            }
         }
+    }
+
+    /// Восстановить черновик: во вкладку этого файла (если открыт сеансом) или в новую.
+    fn recover(&mut self, draft: &Draft) {
+        let doc = Document::recovered(draft.path.clone(), draft.text.clone());
+        let existing = draft
+            .path
+            .as_deref()
+            .and_then(|p| self.tabs.iter().position(|t| t.has_path(p)));
+        match existing {
+            Some(index) => {
+                self.tabs[index].doc = doc;
+                self.activate(index);
+            }
+            None => self.put_document(doc),
+        }
+        let tab = self.tab_mut();
+        // Черновик остаётся до сохранения: следующие записи его обновят.
+        tab.untitled_key = draft.untitled;
+        tab.draft_written = Some((tab.doc.version(), draft.path.clone()));
+        self.set_status("Recovered unsaved changes".into());
     }
 
     // ----- Окно, меню, ввод -----
 
     fn window_title(&self) -> String {
-        let dirty = if self.doc.is_dirty() { "• " } else { "" };
-        format!("{dirty}{} — {APP_TITLE}", self.doc.display_name())
+        let doc = &self.tab().doc;
+        let dirty = if doc.is_dirty() { "• " } else { "" };
+        format!("{dirty}{} — {APP_TITLE}", doc.display_name())
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
+        let shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let new = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
         let open = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
         let save = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
-        let save_as = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::S);
-        let export = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::E);
-        let outline = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::O);
+        let save_as = KeyboardShortcut::new(shift, Key::S);
+        let export = KeyboardShortcut::new(shift, Key::E);
+        let outline = KeyboardShortcut::new(shift, Key::O);
+        let close = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
+        let next = KeyboardShortcut::new(Modifiers::COMMAND, Key::Tab);
+        let prev = KeyboardShortcut::new(shift, Key::Tab);
+        let next_page = KeyboardShortcut::new(Modifiers::COMMAND, Key::PageDown);
+        let prev_page = KeyboardShortcut::new(Modifiers::COMMAND, Key::PageUp);
+        let consume = |s: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(s));
 
-        // save_as проверяем первым: Ctrl+Shift+S иначе съест Ctrl+S
-        if ctx.input_mut(|i| i.consume_shortcut(&save_as)) {
+        // Сочетания с Shift проверяем первыми: иначе Ctrl+S съест Ctrl+Shift+S и т.п.
+        if consume(&save_as) {
             self.save(true);
-        } else if ctx.input_mut(|i| i.consume_shortcut(&save)) {
+        } else if consume(&save) {
             self.save(false);
-        } else if ctx.input_mut(|i| i.consume_shortcut(&outline)) {
+        } else if consume(&outline) {
             self.settings.show_outline = !self.settings.show_outline;
-        } else if ctx.input_mut(|i| i.consume_shortcut(&open)) {
+        } else if consume(&open) {
             self.request(Action::Open(None));
-        } else if ctx.input_mut(|i| i.consume_shortcut(&new)) {
+        } else if consume(&new) {
             self.request(Action::New);
-        } else if ctx.input_mut(|i| i.consume_shortcut(&export)) {
+        } else if consume(&export) {
             self.export_html();
+        } else if consume(&close) {
+            self.request(Action::Close(vec![self.tab().id]));
+        } else if consume(&prev) || consume(&prev_page) {
+            self.cycle_tab(-1);
+        } else if consume(&next) || consume(&next_page) {
+            self.cycle_tab(1);
         }
     }
 
@@ -540,19 +713,23 @@ impl MarkdowntownApp {
             return;
         }
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.doc.is_dirty() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.dialog = Some(Dialog::Unsaved(Action::Exit));
-            } else {
-                self.discard_draft();
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.dialog.is_none() {
+                self.request(Action::Exit);
             }
         }
     }
 
-    /// Файл, перетащенный в окно, открывается; пока его несут — подсказка поверх окна.
+    /// Файлы, перетащенные в окно, открываются; пока их несут — подсказка поверх окна.
     fn handle_drop(&mut self, ctx: &egui::Context) {
-        let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_owned()));
-        if let Some(path) = dropped {
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_owned())
+                .collect()
+        });
+        for path in dropped {
             self.request(Action::Open(Some(path)));
         }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
@@ -628,6 +805,15 @@ impl MarkdowntownApp {
                 #[cfg(windows)]
                 ui.menu_button("File association", |ui| self.association_menu(ui));
                 ui.separator();
+                if ui.button("Close Tab (Ctrl+W)").clicked() {
+                    self.request(Action::Close(vec![self.tab().id]));
+                }
+                if ui
+                    .add_enabled(self.tabs.len() > 1, egui::Button::new("Close Other Tabs"))
+                    .clicked()
+                {
+                    self.request(Action::Close(self.other_tabs(self.active)));
+                }
                 if ui.button("Exit").clicked() {
                     self.request(Action::Exit);
                 }
@@ -704,7 +890,7 @@ impl MarkdowntownApp {
         ui.radio_value(&mut s.view_mode, ViewMode::Preview, "Preview only");
         ui.separator();
         ui.checkbox(&mut s.show_outline, "Outline (Ctrl+Shift+O)");
-        ui.checkbox(&mut self.scroll_sync.enabled, "Synchronized scrolling");
+        ui.checkbox(&mut s.sync_scroll, "Synchronized scrolling");
         ui.separator();
 
         ui.menu_button("Theme", |ui| {
@@ -728,7 +914,7 @@ impl MarkdowntownApp {
         ui.horizontal(|ui| {
             ui.label("Editor font size");
             ui.add(
-                egui::DragValue::new(&mut self.editor.font_size)
+                egui::DragValue::new(&mut s.editor_font_size)
                     .range(crate::style::EDITOR_FONT_SIZE_RANGE)
                     .speed(0.2)
                     .suffix(" pt"),
@@ -737,11 +923,108 @@ impl MarkdowntownApp {
         ui.weak("Whole UI: Ctrl+Plus / Ctrl+Minus / Ctrl+0");
     }
 
+    /// Id вкладок, кроме вкладки `index` (Close Others).
+    fn other_tabs(&self, index: usize) -> Vec<u64> {
+        let keep = self.tabs[index].id;
+        self.tabs
+            .iter()
+            .map(|t| t.id)
+            .filter(|&id| id != keep)
+            .collect()
+    }
+
+    /// Id вкладок правее вкладки `index`.
+    fn tabs_to_the_right(&self, index: usize) -> Vec<u64> {
+        self.tabs[index + 1..].iter().map(|t| t.id).collect()
+    }
+
+    /// Строка вкладок: клик — переключиться, «×» или средняя кнопка — закрыть,
+    /// правая кнопка — меню (Close, Close Others, Close Tabs to the Right).
+    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        /// Что закрыть — считается после цикла, когда `self` уже не заимствован.
+        enum Close {
+            One(u64),
+            Others(usize),
+            ToTheRight(usize),
+        }
+        let mut activate = None;
+        let mut close = None;
+        let count = self.tabs.len();
+        egui::ScrollArea::horizontal()
+            .id_salt("tab_bar")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (i, tab) in self.tabs.iter().enumerate() {
+                        let mut name = tab.doc.display_name();
+                        if tab.doc.is_dirty() {
+                            name.push_str(" •");
+                        }
+                        let hover = tab.doc.path().map_or_else(
+                            || "Not saved yet".to_owned(),
+                            |p| p.display().to_string(),
+                        );
+                        let response = ui
+                            .add(egui::Button::selectable(i == self.active, name))
+                            .on_hover_text(hover);
+                        if response.clicked() {
+                            activate = Some(i);
+                        }
+                        if response.middle_clicked() {
+                            close = Some(Close::One(tab.id));
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button("Close").clicked() {
+                                close = Some(Close::One(tab.id));
+                            }
+                            if ui
+                                .add_enabled(count > 1, egui::Button::new("Close Others"))
+                                .clicked()
+                            {
+                                close = Some(Close::Others(i));
+                            }
+                            if ui
+                                .add_enabled(
+                                    i + 1 < count,
+                                    egui::Button::new("Close Tabs to the Right"),
+                                )
+                                .clicked()
+                            {
+                                close = Some(Close::ToTheRight(i));
+                            }
+                        });
+                        if ui
+                            .add(egui::Button::new("×").frame(false))
+                            .on_hover_text("Close (Ctrl+W)")
+                            .clicked()
+                        {
+                            close = Some(Close::One(tab.id));
+                        }
+                        ui.add_space(6.0);
+                    }
+                });
+            });
+        if let Some(i) = activate {
+            self.activate(i);
+        }
+        let ids = match close {
+            None => return,
+            Some(Close::One(id)) => vec![id],
+            Some(Close::Others(i)) => {
+                // Оставшаяся вкладка становится активной.
+                self.activate(i);
+                self.other_tabs(i)
+            }
+            Some(Close::ToTheRight(i)) => self.tabs_to_the_right(i),
+        };
+        self.request(Action::Close(ids));
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(&self.status);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let format = self.doc.format();
+                let format = self.tab().doc.format();
                 ui.label(format.line_ending.label());
                 ui.separator();
                 ui.label(if format.bom { "UTF-8 BOM" } else { "UTF-8" });
@@ -754,6 +1037,8 @@ impl MarkdowntownApp {
         if !self.settings.show_outline {
             return;
         }
+        let editor_visible = self.settings.view_mode != ViewMode::Preview;
+        let tab = &mut self.tabs[self.active];
         egui::Panel::left("outline")
             .resizable(true)
             .default_size(220.0)
@@ -762,44 +1047,39 @@ impl MarkdowntownApp {
                 ui.add_space(4.0);
                 ui.strong("Outline");
                 ui.separator();
-                let version = self.doc.version();
-                if let Some(byte) = self
-                    .outline
-                    .show(ui, &self.doc.text, version, self.top_byte)
-                {
-                    if self.settings.view_mode != ViewMode::Preview {
-                        self.editor.jump_to(ui.ctx(), &self.doc.text, byte);
-                    }
-                    self.outline_jump = Some(byte);
-                    // Сразу подсветить выбранный раздел, не дожидаясь прокрутки.
-                    self.top_byte = byte;
+                let version = tab.doc.version();
+                let clicked = ui
+                    .push_id(tab.id, |ui| {
+                        tab.outline.show(ui, &tab.doc.text, version, tab.top_byte)
+                    })
+                    .inner;
+                if let Some(byte) = clicked {
+                    tab.jump_to(ui.ctx(), byte, editor_visible);
                 }
             });
     }
 
     fn panels(&mut self, ui: &mut egui::Ui) {
-        let (editor_scroll, preview_scroll) = std::mem::take(&mut self.pending_scroll);
+        let tab = &mut self.tabs[self.active];
+        tab.editor.font_size = self.settings.editor_font_size;
+        tab.scroll_sync.enabled = self.settings.sync_scroll;
+        let id = tab.id;
+        let diagrams = &mut self.diagrams;
+        // Id элементов вкладки (прокрутка, таблицы, окна) — свои у каждой вкладки.
         match self.settings.view_mode {
             ViewMode::Editor => {
-                let editor = egui::CentralPanel::default()
-                    .show(ui, |ui| self.editor.show(ui, &mut self.doc, None))
-                    .inner;
-                self.outline_jump = None;
-                self.top_byte =
-                    editor.byte_at_offset(&self.doc.text, editor.offset + SECTION_PROBE);
+                egui::CentralPanel::default()
+                    .show(ui, |ui| ui.push_id(id, |ui| tab.show_editor(ui)));
+                tab.cancel_preview_jump();
                 return;
             }
             ViewMode::Preview => {
                 let preview = egui::CentralPanel::default()
                     .show(ui, |ui| {
-                        self.preview.show(ui, &mut self.doc, preview_scroll)
+                        ui.push_id(id, |ui| tab.show_preview(ui, diagrams)).inner
                     })
                     .inner;
-                self.jump_preview(&preview);
-                if self.outline_jump.is_none() {
-                    self.top_byte =
-                        preview.byte_for_y(preview.offset + SECTION_PROBE, self.doc.text.len());
-                }
+                tab.after_preview_only(&preview);
                 return;
             }
             ViewMode::Both => {}
@@ -817,58 +1097,76 @@ impl MarkdowntownApp {
             editor_panel = editor_panel.exact_size(width);
             self.last_window_width = window_width;
         }
-        let editor = editor_panel.show(ui, |ui| self.editor.show(ui, &mut self.doc, editor_scroll));
+        let editor = editor_panel.show(ui, |ui| ui.push_id(id, |ui| tab.show_editor(ui)).inner);
         if window_width > 0.0 {
             self.editor_ratio = (editor.response.rect.width() / window_width).clamp(0.1, 0.9);
         }
         let editor = editor.inner;
         let preview = egui::CentralPanel::default()
             .show(ui, |ui| {
-                self.preview.show(ui, &mut self.doc, preview_scroll)
+                ui.push_id(id, |ui| tab.show_preview(ui, diagrams)).inner
             })
             .inner;
+        tab.after_both(ui, &editor, &preview);
+    }
 
-        self.pending_scroll = self.scroll_sync.update(&self.doc.text, &editor, &preview);
-        // Превью тоже переходит к заголовку — и при выключенной синхронной прокрутке.
-        self.jump_preview(&preview);
-        if self.pending_scroll != (None, None) {
-            ui.ctx().request_repaint();
-        }
-        if self.outline_jump.is_none() {
-            self.top_byte = editor.byte_at_offset(&self.doc.text, editor.offset + SECTION_PROBE);
+    /// Ссылки, по которым кликнули в превью в этом кадре: локальные забираем у браузера
+    /// (Markdown — во вкладке, `#якорь` — переход к заголовку), внешние оставляем.
+    fn handle_links(&mut self, ctx: &egui::Context) {
+        let base = self.tab().doc.base_dir().map(Path::to_owned);
+        let mut targets = Vec::new();
+        ctx.output_mut(|o| {
+            o.commands.retain(|command| match command {
+                egui::OutputCommand::OpenUrl(open) => {
+                    match links::classify(&open.url, base.as_deref()) {
+                        Target::External => true,
+                        target => {
+                            targets.push(target);
+                            false
+                        }
+                    }
+                }
+                _ => true,
+            });
+        });
+        for target in targets {
+            match target {
+                Target::External => {}
+                Target::Anchor(anchor) => self.jump_to_anchor(ctx, &anchor),
+                Target::Markdown { path, anchor } => {
+                    self.request(Action::Open(Some(path.clone())));
+                    if let Some(anchor) = anchor
+                        && self.tab().has_path(&path)
+                    {
+                        self.jump_to_anchor(ctx, &anchor);
+                    }
+                }
+                Target::LocalFile(path) => {
+                    let message = links::open_local(&path);
+                    self.set_status(message);
+                }
+                Target::Missing(path) => {
+                    self.set_status(format!("Cannot open link: {} not found", path.display()))
+                }
+            }
         }
     }
 
-    /// Прокрутка превью к заголовку из оглавления. Высоты блоков, которые ещё не
-    /// рисовались, известны приблизительно — поэтому повторяем, пока позиция не устоится.
-    fn jump_preview(&mut self, preview: &crate::scroll_sync::PreviewGeometry) {
-        let Some(byte) = self.outline_jump else {
-            return;
-        };
-        let target =
-            (preview.y_for_byte(byte, self.doc.text.len()) - 8.0).clamp(0.0, preview.max_offset);
-        if (target - preview.offset).abs() > 1.0 {
-            self.pending_scroll.1 = Some(target);
-            self.scroll_sync.expect_preview(target);
-            self.outline_jump_frames += 1;
-            if self.outline_jump_frames > 10 {
-                self.outline_jump = None;
-            }
-        } else {
-            self.outline_jump = None;
-        }
-        if self.outline_jump.is_none() {
-            self.outline_jump_frames = 0;
+    /// Переход к заголовку активной вкладки по якорю ссылки.
+    fn jump_to_anchor(&mut self, ctx: &egui::Context, anchor: &str) {
+        let editor_visible = self.settings.view_mode != ViewMode::Preview;
+        let tab = self.tab_mut();
+        match links::find_anchor(&tab.doc.text, anchor) {
+            Some(byte) => tab.jump_to(ctx, byte, editor_visible),
+            None => self.set_status(format!("No heading for #{anchor}")),
         }
     }
 
     /// Переносит текущее состояние в `settings` перед сохранением.
     fn sync_settings(&mut self, ctx: &egui::Context) {
-        let s = &mut self.settings;
-        s.editor_font_size = self.editor.font_size;
-        s.zoom = ctx.zoom_factor();
-        s.sync_scroll = self.scroll_sync.enabled;
-        s.editor_ratio = self.editor_ratio;
+        self.settings.zoom = ctx.zoom_factor();
+        self.settings.editor_ratio = self.editor_ratio;
+        self.save_session();
     }
 }
 
@@ -886,14 +1184,16 @@ impl eframe::App for MarkdowntownApp {
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
+        egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         self.outline_panel(ui);
         self.panels(ui);
+        self.handle_links(&ctx);
         self.show_dialog(&ctx);
 
         self.check_disk(&ctx);
         self.poll_export(&ctx);
-        self.write_draft(&ctx);
+        self.write_drafts(&ctx);
         self.sync_settings(&ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         // В конце кадра: Exit из меню или диалога закрывает окно в этом же кадре.
@@ -926,7 +1226,7 @@ mod tests {
     /// они рисуются квадратиками. Добавляя новый символ в UI, допишите его сюда.
     /// Проверяются встроенные шрифты: системные запасные (`fonts.rs`) могут
     /// отсутствовать.
-    const UI_SYMBOLS: &[char] = &['⏶', '⏷', '×', '…', '−', '“', '”'];
+    const UI_SYMBOLS: &[char] = &['⏶', '⏷', '×', '…', '−', '“', '”', '•'];
 
     #[test]
     fn ui_symbols_exist_in_default_fonts() {

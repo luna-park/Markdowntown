@@ -57,6 +57,9 @@ pub struct Editor {
     pending_offset: Option<f32>,
     /// Переход (оглавление): поставить этот байт в верхнюю строку панели.
     jump: Option<usize>,
+    /// Id текстового поля: под ним egui хранит курсор и историю отмены —
+    /// у каждой вкладки свой.
+    text_id: Id,
 }
 
 impl Default for Editor {
@@ -69,6 +72,7 @@ impl Default for Editor {
             reveal: None,
             pending_offset: None,
             jump: None,
+            text_id: Id::new(TEXT_ID),
         }
     }
 }
@@ -97,6 +101,14 @@ struct SearchState {
 }
 
 impl Editor {
+    /// Редактор вкладки `tab`: своё состояние текстового поля (курсор, отмена).
+    pub fn for_tab(tab: u64) -> Self {
+        Self {
+            text_id: Id::new((TEXT_ID, tab)),
+            ..Self::default()
+        }
+    }
+
     /// `scroll_to` — прокрутка от синхронизации с превью.
     pub fn show(
         &mut self,
@@ -105,7 +117,7 @@ impl Editor {
         scroll_to: Option<f32>,
     ) -> EditorGeometry {
         let ctx = ui.ctx().clone();
-        let text_id = Id::new(TEXT_ID);
+        let text_id = self.text_id;
 
         self.handle_search_shortcuts(&ctx, doc, text_id);
         if self.search.open {
@@ -214,7 +226,7 @@ impl Editor {
 
     /// Перейти к байту `byte`: курсор — туда, строка — вверху панели (оглавление).
     pub fn jump_to(&mut self, ctx: &egui::Context, text: &str, byte: usize) {
-        let text_id = Id::new(TEXT_ID);
+        let text_id = self.text_id;
         let mut state = TextEditState::load(ctx, text_id).unwrap_or_default();
         let cursor = CCursor::new(byte_to_char(text, byte));
         state.cursor.set_char_range(Some(CCursorRange::one(cursor)));

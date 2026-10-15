@@ -7,6 +7,8 @@ A Markdown editor for Windows with a live preview and Mermaid diagrams.
   syntax-highlighted code, local and remote images
 - Math formulas: `$…$` inline and `$$…$$` on their own line (LaTeX, rendered like KaTeX)
 - Mermaid diagrams rendered right in the preview — no browser or Node.js needed
+- Tabs: each file in its own tab (right-click a tab to close the others); the open files
+  come back the next time you start the app
 - Synchronized scrolling between the editor and the preview
 - Outline panel: jump to any heading in the editor and the preview
 - Export to a single self-contained HTML file (styles, diagrams and local images inside);
@@ -35,6 +37,7 @@ falls back to software rendering.
 | Action | Keys |
 |---|---|
 | New / Open / Save / Save As | Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S |
+| Close the tab / Next tab / Previous tab | Ctrl+W / Ctrl+Tab / Ctrl+Shift+Tab |
 | Export to HTML | Ctrl+Shift+E |
 | Show or hide the outline (list of headings) | Ctrl+Shift+O |
 | Bold / Italic / Inline code / Link | Ctrl+B / Ctrl+I / Ctrl+E / Ctrl+K |
@@ -42,7 +45,8 @@ falls back to software rendering.
 | Zoom the whole UI | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Continue a list or quote | Enter at the end of an item (Enter on an empty item ends the list) |
 
-Click a diagram in the preview to open it in a zoomable window.
+Click a diagram in the preview to open it in a zoomable window. Links to other Markdown
+files open them in a tab, and links like `#section` jump to the heading.
 
 ## Opening .md files with Markdowntown
 

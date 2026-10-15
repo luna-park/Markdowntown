@@ -360,7 +360,7 @@ fn add_heading_ids(events: &mut [Event<'_>]) -> Option<String> {
 }
 
 /// Якорь заголовка как на GitHub: строчные буквы, пробелы → `-`, пунктуация убирается.
-fn slugify(text: &str) -> String {
+pub(crate) fn slugify(text: &str) -> String {
     text.trim()
         .chars()
         .flat_map(char::to_lowercase)
@@ -430,7 +430,7 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// `%20` и т.п. в пути картинки → байты; некорректные последовательности — как есть.
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

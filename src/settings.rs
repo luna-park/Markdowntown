@@ -52,6 +52,11 @@ pub struct Settings {
     pub theme: Theme,
     /// Недавние файлы, свежие первыми.
     pub recent_files: Vec<PathBuf>,
+    /// Файлы, открытые во вкладках при закрытии, — открываются при следующем запуске.
+    /// Безымянные вкладки сюда не попадают.
+    pub session: Vec<PathBuf>,
+    /// Активная вкладка сеанса (индекс в `session`).
+    pub session_active: usize,
 }
 
 impl Default for Settings {
@@ -66,6 +71,8 @@ impl Default for Settings {
             show_outline: false,
             theme: Theme::default(),
             recent_files: Vec::new(),
+            session: Vec::new(),
+            session_active: 0,
         }
     }
 }
@@ -84,7 +91,7 @@ impl Settings {
 }
 
 /// Пути на Windows сравниваются без учёта регистра и вида разделителей.
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
     norm(a) == norm(b)
 }

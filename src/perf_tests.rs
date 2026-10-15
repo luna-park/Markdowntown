@@ -6,6 +6,30 @@ use crate::document::Document;
 use crate::editor::Editor;
 use crate::preview::Preview;
 
+/// Превью со своим сервисом диаграмм (в приложении сервис общий на все вкладки).
+struct TestPreview {
+    preview: Preview,
+    diagrams: crate::diagram::DiagramService,
+}
+
+impl TestPreview {
+    fn new(ctx: &egui::Context) -> Self {
+        Self {
+            preview: Preview::default(),
+            diagrams: crate::diagram::DiagramService::new(ctx),
+        }
+    }
+
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        doc: &mut Document,
+        scroll_to: Option<f32>,
+    ) -> crate::scroll_sync::PreviewGeometry {
+        self.preview.show(ui, doc, scroll_to, &mut self.diagrams)
+    }
+}
+
 /// Документ ~200 КБ из повторённого showcase (без картинок по сети).
 fn big_document() -> String {
     let showcase = include_str!("../examples/showcase.md").replace(
@@ -27,14 +51,14 @@ enum Panes {
     Preview,
 }
 
-fn frame(ctx: &egui::Context, editor: &mut Editor, preview: &mut Preview, doc: &mut Document) {
+fn frame(ctx: &egui::Context, editor: &mut Editor, preview: &mut TestPreview, doc: &mut Document) {
     frame_with(ctx, editor, preview, doc, Panes::Both);
 }
 
 fn frame_with(
     ctx: &egui::Context,
     editor: &mut Editor,
-    preview: &mut Preview,
+    preview: &mut TestPreview,
     doc: &mut Document,
     panes: Panes,
 ) {
@@ -70,7 +94,7 @@ fn perf_idle_and_typing_frames() {
     crate::fonts::install(&ctx, None);
     let mut doc = Document::new_untitled(big_document());
     let mut editor = Editor::default();
-    let mut preview = Preview::default();
+    let mut preview = TestPreview::new(&ctx);
     println!("document: {} KB", doc.text.len() / 1024);
 
     // Прогрев: шрифты, кэши.
@@ -109,7 +133,7 @@ fn perf_breakdown() {
         crate::fonts::install(&ctx, None);
         let mut doc = Document::new_untitled(big_document());
         let mut editor = Editor::default();
-        let mut preview = Preview::default();
+        let mut preview = TestPreview::new(&ctx);
         for _ in 0..3 {
             frame_with(&ctx, &mut editor, &mut preview, &mut doc, panes);
         }
@@ -145,7 +169,7 @@ fn preview_idle_ms(text: String) -> f64 {
     crate::fonts::install(&ctx, None);
     let mut doc = Document::new_untitled(text);
     let mut editor = Editor::default();
-    let mut preview = Preview::default();
+    let mut preview = TestPreview::new(&ctx);
     for _ in 0..3 {
         frame_with(&ctx, &mut editor, &mut preview, &mut doc, Panes::Preview);
     }
@@ -191,7 +215,7 @@ fn preview_anchors(text: &str, height: f32, offset: f32) -> (Vec<(usize, f32)>, 
     crate::style::apply_global(&ctx);
     crate::fonts::install(&ctx, None);
     let mut doc = Document::new_untitled(text);
-    let mut preview = Preview::default();
+    let mut preview = TestPreview::new(&ctx);
     let mut geometry = None;
     let mut last_ms = 0.0;
     for i in 0..6 {
@@ -251,4 +275,56 @@ fn perf_culled_preview() {
     let text = big_document();
     let (_, ms) = preview_anchors(&text, 1000.0, 100_000.0);
     println!("culled preview frame: {ms:.1} ms");
+}
+
+/// Первое переключение на вкладку: создание вкладки и первые кадры её панелей
+/// (кэша высот блоков ещё нет). `cargo test --release perf_first_tab_frames -- --ignored --nocapture`.
+#[test]
+#[ignore = "замер, запускать вручную"]
+fn perf_first_tab_frames() {
+    for (name, text) in [
+        (
+            "showcase",
+            include_str!("../examples/showcase.md").to_owned(),
+        ),
+        ("200 KB", big_document()),
+    ] {
+        let ctx = egui::Context::default();
+        crate::style::apply_global(&ctx);
+        crate::fonts::install(&ctx, None);
+        let mut doc = Document::new_untitled(text);
+        // Прогрев контекста (шрифты), как в работающем приложении.
+        let mut warm = TestPreview::new(&ctx);
+        let mut warm_editor = Editor::default();
+        let mut warm_doc = Document::new_untitled("# warm\n\ntext\n");
+        for _ in 0..3 {
+            frame(&ctx, &mut warm_editor, &mut warm, &mut warm_doc);
+        }
+
+        let t = Instant::now();
+        let mut editor = Editor::for_tab(7);
+        let mut preview = TestPreview::new(&ctx);
+        let create = t.elapsed().as_secs_f64() * 1e3;
+        let mut frames = Vec::new();
+        for _ in 0..4 {
+            let t = Instant::now();
+            frame(&ctx, &mut editor, &mut preview, &mut doc);
+            frames.push(t.elapsed().as_secs_f64() * 1e3);
+        }
+        let frames: Vec<String> = frames.iter().map(|ms| format!("{ms:.1}")).collect();
+        println!(
+            "{name}: new tab {create:.1} ms, first frames {} ms",
+            frames.join(" / ")
+        );
+
+        // Отдельно: первый кадр только редактора и только превью новой вкладки.
+        for (pane, panes) in [("editor", Panes::Editor), ("preview", Panes::Preview)] {
+            let mut doc = Document::new_untitled(doc.text.clone());
+            let mut editor = Editor::for_tab(8);
+            let mut preview = TestPreview::new(&ctx);
+            let t = Instant::now();
+            frame_with(&ctx, &mut editor, &mut preview, &mut doc, panes);
+            println!("  {pane} only: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+    }
 }

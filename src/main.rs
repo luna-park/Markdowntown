@@ -10,6 +10,7 @@ mod export;
 mod file_assoc;
 mod fonts;
 mod gpu;
+mod links;
 mod logging;
 mod math;
 mod outline;
@@ -19,6 +20,7 @@ mod scroll_sync;
 mod segment;
 mod settings;
 mod style;
+mod tab;
 mod viewer;
 
 #[cfg(test)]

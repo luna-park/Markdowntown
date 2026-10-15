@@ -42,8 +42,6 @@ fn apply_preview_style(ui: &mut egui::Ui) {
 #[derive(Default)]
 pub struct Preview {
     md_cache: CommonMarkCache,
-    /// Создаётся при первом показе: нужен `egui::Context`.
-    diagrams: Option<DiagramService>,
     /// Версия документа, для которой посчитаны `segments`.
     version: Option<(u64, u64)>,
     segments: Vec<Segment>,
@@ -71,6 +69,7 @@ impl Preview {
         ui: &mut egui::Ui,
         doc: &mut Document,
         scroll_to: Option<f32>,
+        diagrams: &mut DiagramService,
     ) -> PreviewGeometry {
         apply_preview_style(ui);
         self.frame += 1;
@@ -80,9 +79,6 @@ impl Preview {
             math.borrow_mut().show(ui, tex, inline);
         };
         let ctx = ui.ctx().clone();
-        let diagrams = self
-            .diagrams
-            .get_or_insert_with(|| DiagramService::new(&ctx));
         diagrams.begin_frame(&ctx);
 
         if self.version != Some(doc.version()) {

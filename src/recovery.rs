@@ -19,10 +19,14 @@ pub struct Draft {
     pub text: String,
     /// Время записи черновика, секунды Unix.
     pub saved_at: u64,
+    /// Ключ безымянного документа (у каждой вкладки свой). `None` — черновик старой
+    /// версии с общим файлом `untitled.json`.
+    #[serde(default)]
+    pub untitled: Option<u64>,
 }
 
 impl Draft {
-    pub fn new(path: Option<PathBuf>, text: String) -> Self {
+    pub fn new(path: Option<PathBuf>, untitled: Option<u64>, text: String) -> Self {
         let saved_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -30,6 +34,7 @@ impl Draft {
             path,
             text,
             saved_at,
+            untitled,
         }
     }
 
@@ -60,16 +65,17 @@ impl Drafts {
         }
     }
 
-    /// Файл черновика для документа: имя — хэш пути (у безымянного — фиксированное).
-    fn file_for(&self, path: Option<&Path>) -> PathBuf {
-        let name = match path {
-            Some(p) => {
+    /// Файл черновика для документа: имя — хэш пути; у безымянного — по его ключу.
+    fn file_for(&self, path: Option<&Path>, untitled: Option<u64>) -> PathBuf {
+        let name = match (path, untitled) {
+            (Some(p), _) => {
                 use std::hash::{DefaultHasher, Hash, Hasher};
                 let mut h = DefaultHasher::new();
                 p.to_string_lossy().to_lowercase().hash(&mut h);
                 format!("{:016x}.json", h.finish())
             }
-            None => "untitled.json".to_owned(),
+            (None, Some(key)) => format!("untitled-{key:016x}.json"),
+            (None, None) => "untitled.json".to_owned(),
         };
         self.dir.join(name)
     }
@@ -77,15 +83,16 @@ impl Drafts {
     pub fn save(&self, draft: &Draft) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let json = serde_json::to_vec(draft).map_err(std::io::Error::other)?;
-        let file = self.file_for(draft.path.as_deref());
+        let file = self.file_for(draft.path.as_deref(), draft.untitled);
         // Через временный файл: сбой во время записи не портит прошлый черновик.
         let tmp = file.with_extension("tmp");
         std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, &file)
     }
 
-    pub fn remove(&self, path: Option<&Path>) {
-        let _ = std::fs::remove_file(self.file_for(path));
+    /// `untitled` важен только для безымянного документа (`path` = `None`).
+    pub fn remove(&self, path: Option<&Path>, untitled: Option<u64>) {
+        let _ = std::fs::remove_file(self.file_for(path, untitled));
     }
 
     /// Все оставшиеся черновики, свежие первыми. Повреждённые файлы пропускаются.
@@ -121,24 +128,45 @@ mod tests {
         assert!(drafts.list().is_empty());
 
         let path = PathBuf::from(r"C:\docs\Заметки.md");
-        let mut older = Draft::new(Some(path.clone()), "текст".into());
+        let mut older = Draft::new(Some(path.clone()), None, "текст".into());
         older.saved_at -= 100;
         drafts.save(&older).unwrap();
-        drafts.save(&Draft::new(None, "untitled".into())).unwrap();
+        drafts
+            .save(&Draft::new(None, Some(1), "first".into()))
+            .unwrap();
+        drafts
+            .save(&Draft::new(None, Some(2), "second".into()))
+            .unwrap();
 
         let list = drafts.list();
-        assert_eq!(list.len(), 2);
-        assert_eq!(list[0].path, None, "fresh first");
-        assert_eq!(list[1].text, "текст");
+        assert_eq!(list.len(), 3, "untitled documents keep separate drafts");
+        assert_eq!(list[2].text, "текст", "fresh first");
 
         // Повторное сохранение того же документа перезаписывает черновик.
         drafts
-            .save(&Draft::new(Some(path.clone()), "новый".into()))
+            .save(&Draft::new(Some(path.clone()), Some(7), "новый".into()))
             .unwrap();
-        assert_eq!(drafts.list().len(), 2);
+        assert_eq!(drafts.list().len(), 3);
 
-        drafts.remove(Some(&path));
-        drafts.remove(None);
+        drafts.remove(Some(&path), Some(7));
+        drafts.remove(None, Some(1));
+        drafts.remove(None, Some(2));
+        assert!(drafts.list().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_untitled_draft_is_read_and_removed() {
+        let (dir, drafts) = temp_drafts("legacy");
+        std::fs::create_dir_all(dir.join(DRAFTS_DIR)).unwrap();
+        std::fs::write(
+            dir.join(DRAFTS_DIR).join("untitled.json"),
+            br#"{"path":null,"text":"old","saved_at":1}"#,
+        )
+        .unwrap();
+        let list = drafts.list();
+        assert_eq!((list.len(), list[0].untitled), (1, None));
+        drafts.remove(None, list[0].untitled);
         assert!(drafts.list().is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -148,7 +176,9 @@ mod tests {
         let (dir, drafts) = temp_drafts("corrupt");
         std::fs::create_dir_all(dir.join(DRAFTS_DIR)).unwrap();
         std::fs::write(dir.join(DRAFTS_DIR).join("bad.json"), b"{not json").unwrap();
-        drafts.save(&Draft::new(None, "ok".into())).unwrap();
+        drafts
+            .save(&Draft::new(None, Some(1), "ok".into()))
+            .unwrap();
         assert_eq!(drafts.list().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
