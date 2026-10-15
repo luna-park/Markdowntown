@@ -6,5 +6,12 @@ edition = "2024"
 [dependencies]
 eframe = "0.36.2"
 egui = "0.36.2"
-egui_commonmark = "0.25.0"
+egui_commonmark = { version = "0.25.0", features = ["better_syntax_highlighting", "svg", "fetch"] }
+egui_extras = { version = "0.36.2", features = ["svg_text"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.17.2"
+
+# Зависимости без полной отладочной информации: debug-сборка в разы меньше на диске.
+[profile.dev.package."*"]
+debug = false

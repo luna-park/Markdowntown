@@ -1,98 +1,85 @@
-use std::path::PathBuf;
+use std::path::Path;
 
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use crate::document::Document;
+use crate::preview::Preview;
 
-const SAMPLE: &str = r#"# mdview
+const WELCOME: &str = r#"# mdview
 
-Простой редактор **Markdown** с _превью_.
+A simple **Markdown** editor with a live _preview_.
 
-- списки
-- `inline code`
-- [ссылки](https://commonmark.org)
-
-```rust
-fn main() {
-    println!("Hello");
-}
-```
-
-| Колонка | Значение |
-|---------|----------|
-| a       | 1        |
+- Open a file with **Ctrl+O**, save with **Ctrl+S**
+- [x] GitHub-flavored Markdown
+- [ ] Mermaid diagrams (coming soon)
 
 ```mermaid
 graph TD
-    A[Редактор] --> B[Превью]
+    A[Editor] --> B[Preview]
 ```
 "#;
 
 pub struct MdViewApp {
-    text: String,
-    path: Option<PathBuf>,
-    dirty: bool,
-    md_cache: CommonMarkCache,
+    doc: Document,
+    preview: Preview,
     status: String,
 }
 
 impl MdViewApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self {
-            text: SAMPLE.to_owned(),
-            path: None,
-            dirty: false,
-            md_cache: CommonMarkCache::default(),
+        let mut app = Self {
+            doc: Document::new_untitled(WELCOME),
+            preview: Preview::default(),
             status: String::new(),
+        };
+        if let Some(path) = std::env::args_os().nth(1) {
+            app.load(Path::new(&path));
+        }
+        app
+    }
+
+    fn open_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Markdown", &["md", "markdown"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+        {
+            self.load(&path);
         }
     }
 
-    fn open(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Markdown", &["md", "markdown"])
-            .pick_file()
-        else {
-            return;
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                self.text = text;
-                self.status = format!("Открыт {}", path.display());
-                self.path = Some(path);
-                self.dirty = false;
+    fn load(&mut self, path: &Path) {
+        match Document::load(path) {
+            Ok(doc) => {
+                self.status = format!("Opened {}", path.display());
+                self.doc = doc;
             }
-            Err(e) => self.status = format!("Ошибка чтения: {e}"),
+            Err(e) => self.status = format!("Cannot open {}: {e}", path.display()),
         }
     }
 
     fn save(&mut self, save_as: bool) {
-        let path = match (&self.path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => match rfd::FileDialog::new()
-                .add_filter("Markdown", &["md"])
-                .set_file_name("untitled.md")
-                .save_file()
-            {
-                Some(p) => p,
-                None => return,
-            },
-        };
-        match std::fs::write(&path, &self.text) {
-            Ok(()) => {
-                self.status = format!("Сохранён {}", path.display());
-                self.path = Some(path);
-                self.dirty = false;
+        let result = match (self.doc.path(), save_as) {
+            (Some(_), false) => self.doc.save(),
+            _ => {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Markdown", &["md"])
+                    .set_file_name(self.doc.display_name())
+                    .save_file()
+                else {
+                    return;
+                };
+                self.doc.save_as(&path)
             }
-            Err(e) => self.status = format!("Ошибка записи: {e}"),
-        }
+        };
+        self.status = match (result, self.doc.path()) {
+            (Ok(()), Some(path)) => format!("Saved {}", path.display()),
+            (Ok(()), None) => "Saved".to_owned(),
+            (Err(e), _) => format!("Cannot save: {e}"),
+        };
     }
 
     fn window_title(&self) -> String {
-        let name = self
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "untitled".to_owned());
-        format!("{}{name} — mdview", if self.dirty { "• " } else { "" })
+        let dirty = if self.doc.is_dirty() { "• " } else { "" };
+        format!("{dirty}{} — mdview", self.doc.display_name())
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
@@ -107,7 +94,7 @@ impl MdViewApp {
         } else if ctx.input_mut(|i| i.consume_shortcut(&save)) {
             self.save(false);
         } else if ctx.input_mut(|i| i.consume_shortcut(&open)) {
-            self.open();
+            self.open_dialog();
         }
     }
 }
@@ -119,14 +106,14 @@ impl eframe::App for MdViewApp {
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("Файл", |ui| {
-                    if ui.button("Открыть… (Ctrl+O)").clicked() {
-                        self.open();
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open… (Ctrl+O)").clicked() {
+                        self.open_dialog();
                     }
-                    if ui.button("Сохранить (Ctrl+S)").clicked() {
+                    if ui.button("Save (Ctrl+S)").clicked() {
                         self.save(false);
                     }
-                    if ui.button("Сохранить как… (Ctrl+Shift+S)").clicked() {
+                    if ui.button("Save as… (Ctrl+Shift+S)").clicked() {
                         self.save(true);
                     }
                 });
@@ -134,7 +121,15 @@ impl eframe::App for MdViewApp {
         });
 
         egui::Panel::bottom("status").show(ui, |ui| {
-            ui.label(&self.status);
+            ui.horizontal(|ui| {
+                ui.label(&self.status);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let format = self.doc.format();
+                    ui.label(format.line_ending.label());
+                    ui.separator();
+                    ui.label(if format.bom { "UTF-8 BOM" } else { "UTF-8" });
+                });
+            });
         });
 
         egui::Panel::left("editor")
@@ -146,12 +141,12 @@ impl eframe::App for MdViewApp {
                     .show(ui, |ui| {
                         let resp = ui.add_sized(
                             ui.available_size(),
-                            egui::TextEdit::multiline(&mut self.text)
+                            egui::TextEdit::multiline(&mut self.doc.text)
                                 .code_editor()
                                 .desired_width(f32::INFINITY),
                         );
                         if resp.changed() {
-                            self.dirty = true;
+                            self.doc.mark_edited();
                         }
                     });
             });
@@ -159,9 +154,7 @@ impl eframe::App for MdViewApp {
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("preview_scroll")
-                .show(ui, |ui| {
-                    CommonMarkViewer::new().show(ui, &mut self.md_cache, &self.text);
-                });
+                .show(ui, |ui| self.preview.show(ui, &mut self.doc));
         });
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));

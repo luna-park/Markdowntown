@@ -19,8 +19,18 @@ cargo fmt             # форматирование
 ## Структура
 
 - `src/main.rs` — точка входа, настройки окна (`NativeOptions`), `run_native`.
-- `src/app.rs` — `MdViewApp`: состояние (текст, путь, флаг `dirty`, кэш рендера), меню «Файл»,
-  горячие клавиши (Ctrl+O / Ctrl+S / Ctrl+Shift+S), панель редактора слева, превью справа, строка статуса.
+- `src/app.rs` — `MdViewApp`: меню File, горячие клавиши (Ctrl+O / Ctrl+S / Ctrl+Shift+S),
+  панель редактора слева, превью справа, строка статуса (сообщение, кодировка, EOL).
+  Файл из первого аргумента командной строки открывается при старте.
+- `src/document.rs` — `Document`: текст (всегда с `\n`, без BOM), путь, `dirty`, формат файла
+  (BOM, CRLF/LF), `version()` — ключ для кэшей. Чтение/запись с сохранением формата,
+  атомарная запись. После правки `text` вызывать `mark_edited()`.
+- `src/segment.rs` — `split()`: документ → сегменты Markdown / Mermaid (только блоки верхнего
+  уровня) с байтовыми диапазонами и номерами строк.
+- `src/preview.rs` — `Preview`: кэш сегментов по `Document::version()`, рендер Markdown через
+  `egui_commonmark` (`show_mut` — чекбоксы task-list пишут в исходник), mermaid — заглушка.
+- `examples/showcase.md` — документ со всеми поддерживаемыми элементами для ручной проверки
+  (`cargo run -- examples/showcase.md`).
 
 ## Зависимости
 
@@ -29,6 +39,15 @@ cargo fmt             # форматирование
 | `eframe`, `egui` | окно и immediate-mode UI |
 | `egui_commonmark` | рендер Markdown в egui (на базе `pulldown-cmark`) |
 | `rfd` | нативные диалоги открытия/сохранения файлов |
+| `pulldown-cmark` | разбор Markdown для сегментации (опции — как в `egui_commonmark`) |
+| `egui_extras` | загрузчики картинок; feature `svg_text` — текст внутри SVG |
+| `image` | декодеры PNG/JPEG/GIF/WebP/BMP для картинок в превью |
+
+`egui_commonmark` подключён с features `better_syntax_highlighting`, `svg`, `fetch`
+(картинки по URL; HTTP через `ureq` + rustls, без OpenSSL).
+
+В `[profile.dev.package."*"]` у зависимостей отключена отладочная информация —
+иначе debug-сборка занимает несколько ГБ.
 
 Версия `egui_commonmark` должна быть совместима с версией `egui`. После обновления зависимостей
 проверять `cargo tree -i egui` — в дереве должна быть ровно одна версия `egui`.
