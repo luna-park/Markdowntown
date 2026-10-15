@@ -151,19 +151,34 @@ impl Preview {
                             ui.allocate_space(egui::vec2(width, (height - item_spacing).max(0.0)));
                             continue;
                         }
-                        let edited = ui
-                            .push_id(i, |ui| {
-                                show_markdown(
-                                    ui,
-                                    &mut self.md_cache,
-                                    &math_fn,
-                                    image_base.as_deref(),
-                                    doc,
-                                    seg,
-                                    appendix,
-                                )
-                            })
-                            .inner;
+                        // Блок рисуется в дочерней области ровно по ширине панели и занимает
+                        // в превью ровно эту ширину: если что-то в нём окажется шире,
+                        // оно обрежется по краю, а не растянет (через `max_rect`) все
+                        // следующие блоки.
+                        let block_rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(width, f32::INFINITY),
+                        );
+                        let mut block_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .id_salt(i)
+                                .max_rect(block_rect)
+                                .layout(*ui.layout()),
+                        );
+                        let edited = show_markdown(
+                            &mut block_ui,
+                            &mut self.md_cache,
+                            &math_fn,
+                            image_base.as_deref(),
+                            doc,
+                            seg,
+                            appendix,
+                        );
+                        let used = egui::Rect::from_min_size(
+                            block_rect.min,
+                            egui::vec2(width, block_ui.min_rect().height()),
+                        );
+                        ui.advance_cursor_after_rect(used);
                         if edited {
                             // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
                             ctx.request_repaint();

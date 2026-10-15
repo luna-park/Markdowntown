@@ -488,6 +488,13 @@ impl CommonMarkViewerInternal {
             let id = ui.id().with("_table").with(self.curr_table);
             self.curr_table += 1;
 
+            // Markdowntown patch: широкая таблица прокручивается по горизонтали внутри себя
+            // (как на GitHub). В оригинале `Grid` расширял область превью, и весь текст
+            // после таблицы переносился по её ширине, уходя за край панели.
+            egui::ScrollArea::horizontal()
+                .id_salt(id.with("_scroll"))
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 let Table { header, rows } = parse_table(events);
 
@@ -529,6 +536,7 @@ impl CommonMarkViewerInternal {
                     }
                 });
             });
+                });
 
             self.is_table = false;
             if events.peek().is_none() {
