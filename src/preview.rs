@@ -408,6 +408,26 @@ fn file_uri_prefix(dir: &std::path::Path) -> String {
 mod tests {
     use super::*;
 
+    /// Ширины столбцов таблицы (патч `egui_commonmark`, см. vendor/README.md).
+    #[test]
+    fn table_column_widths() {
+        use egui_commonmark::column_widths;
+        // Естественные ширины помещаются — без переносов.
+        assert_eq!(
+            column_widths(&[10.0, 20.0], &[50.0, 60.0], 200.0),
+            [50.0, 60.0]
+        );
+        // Не помещаются: короткий столбец не растёт, длинный забирает остаток.
+        let w = column_widths(&[40.0, 30.0], &[40.0, 500.0], 200.0);
+        assert_eq!(w[0], 40.0);
+        assert!((w[1] - 160.0).abs() < 1e-3);
+        // Не помещаются даже минимумы — минимумы (горизонтальная прокрутка).
+        assert_eq!(
+            column_widths(&[100.0, 120.0], &[300.0, 400.0], 150.0),
+            [100.0, 120.0]
+        );
+    }
+
     #[test]
     fn file_uri_prefix_uses_forward_slashes() {
         assert_eq!(

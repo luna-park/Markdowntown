@@ -1,0 +1,11 @@
+Ubuntu Bold font (Ubuntu-Bold.ttf)
+==================================
+
+Markdowntown embeds the Ubuntu Bold font for headings in the preview, to match the
+Ubuntu Light font that egui uses for body text.
+
+Copyright 2011 Canonical Ltd. The font is part of the Ubuntu Font Family:
+  https://design.ubuntu.com/font
+
+It is licensed under the Ubuntu Font Licence, Version 1.0. The full license text is
+in UFL.txt in this directory.

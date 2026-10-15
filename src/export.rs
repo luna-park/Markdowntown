@@ -555,9 +555,10 @@ code, pre, .raw-html {
 pre { padding: 16px; overflow: auto; line-height: 1.45; border-radius: 6px; }
 pre code { font-size: 100%; }
 .raw-html { white-space: pre-wrap; }
-table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow: auto; }
+table { border-collapse: collapse; display: block; max-width: 100%; overflow: auto; }
 th, td { padding: 6px 13px; border: 1px solid var(--border); }
-th { font-weight: 600; }
+th { font-weight: 600; text-align: left; }
+th, td { vertical-align: top; }
 tr:nth-child(2n) { background: var(--code-bg); }
 img { max-width: 100%; }
 figure.mermaid { text-align: center; }

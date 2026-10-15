@@ -47,8 +47,9 @@ cargo fmt             # форматирование
 
 - `build.rs` — ресурсы exe (иконка, сведения о версии) через `winresource` (нужен `rc.exe`
   из Windows SDK).
-- `assets/` — иконка; `licenses/` — лицензии, которые `cargo-about` не находит сам
-  (шрифты KaTeX внутри `ratex-katex-fonts`); `about.toml` / `about.hbs` — допустимые
+- `assets/` — иконка, `fonts/Ubuntu-Bold.ttf` (жирный шрифт заголовков превью, вшит);
+  `licenses/` — лицензии, которые `cargo-about` не находит сам (шрифты KaTeX внутри
+  `ratex-katex-fonts`, Ubuntu Bold — UFL), копируются в архив целиком; `about.toml` / `about.hbs` — допустимые
   лицензии зависимостей и шаблон `THIRD_PARTY_LICENSES.html`.
 - `src/main.rs` — точка входа, настройки окна (`NativeOptions`), путь persistence
   (`<каталог данных>pp.ron`), `run_native`.
@@ -68,7 +69,8 @@ cargo fmt             # форматирование
 - `src/logging.rs` — журнал в каталоге данных, запись паник; в `main` — окно с ошибкой,
   если приложение не смогло запуститься.
 - `src/fonts.rs` — системные шрифты Windows: запасные для символов, выбор шрифта редактора
-  (семейство `editor`); `install` вызывать при старте и смене шрифта.
+  (семейство `editor`), жирный шрифт заголовков превью (семейство `heading`, Ubuntu Bold
+  из `assets/fonts`); `install` вызывать при старте и смене шрифта.
 - `src/app.rs` — `MarkdowntownApp`: вкладки (всегда хотя бы одна), меню File / View, строка
   вкладок, горячие клавиши, панели и режимы вида, строка статуса. Действия (`Action`: New,
   Open, Close, Exit) идут через `request`: Open открывает файл в новой вкладке (уже открытый —
@@ -161,7 +163,8 @@ cargo fmt             # форматирование
 
 `egui_commonmark` и `egui_commonmark_backend` подменены пропатченными копиями из `vendor/`
 через `[patch.crates-io]`: размеры заголовков H1–H6 как на GitHub, `render_until` для
-поблочного рендера, ширина метки сноски. Подробности и порядок обновления —
+поблочного рендера, ширина метки сноски, вложенные цитаты, таблицы по ширине панели
+(перенос текста в ячейках, разделители столбцов). Подробности и порядок обновления —
 [vendor/README.md](vendor/README.md). При обновлении `egui_commonmark` проверять, что патч
 применился: `cargo tree -i egui_commonmark` и `cargo tree -i egui_commonmark_backend`
 должны показывать пути `vendor/...`.

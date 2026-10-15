@@ -143,6 +143,15 @@ impl Style {
                 .map_or(14.0, |d| d.size);
             let scale = SCALE[usize::from(level).min(SCALE.len() - 1)];
             text = text.strong().size(body * scale);
+            // Markdowntown patch: заголовки — жирным шрифтом, если приложение установило
+            // семейство `heading` (у egui нет жирного начертания; `strong()` — только цвет).
+            let heading = egui::FontFamily::Name("heading".into());
+            if ui
+                .ctx()
+                .fonts(|f| f.definitions().families.contains_key(&heading))
+            {
+                text = text.family(heading);
+            }
             // H6 на GitHub — приглушённым цветом.
             if level >= 5 {
                 text = text.weak();

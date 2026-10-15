@@ -488,54 +488,140 @@ impl CommonMarkViewerInternal {
             let id = ui.id().with("_table").with(self.curr_table);
             self.curr_table += 1;
 
-            // Markdowntown patch: широкая таблица прокручивается по горизонтали внутри себя
-            // (как на GitHub). В оригинале `Grid` расширял область превью, и весь текст
-            // после таблицы переносился по её ширине, уходя за край панели.
+            // Markdowntown patch: таблица по ширине панели с переносом текста в ячейках
+            // (вместо `Grid`, который не переносит текст и растягивался вширь).
+            // Ширины столбцов — как при автоматической раскладке таблиц в браузере:
+            // см. `column_widths`. Если даже минимальные ширины не помещаются, таблица
+            // прокручивается по горизонтали внутри себя.
+            let Table { header, rows } = parse_table(events);
+            let frame = egui::Frame::group(ui.style());
+            let frame_width = frame.total_margin().sum().x;
+            let available = (ui.available_width().min(max_width) - frame_width).max(0.0);
+            let pad = egui::vec2(6.0, 3.0);
+
+            let columns = std::iter::once(&header)
+                .chain(rows.iter())
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0);
+            let mut min = vec![0.0f32; columns];
+            let mut max = vec![0.0f32; columns];
+            for row in std::iter::once(&header).chain(rows.iter()) {
+                for (c, cell) in row.iter().enumerate() {
+                    let (cell_min, cell_max) = measure_cell(ui, cell);
+                    min[c] = min[c].max(cell_min + 2.0 * pad.x);
+                    max[c] = max[c].max(cell_max + 2.0 * pad.x);
+                }
+            }
+            let widths = column_widths(&min, &max, available);
+            let total: f32 = widths.iter().sum();
+
             egui::ScrollArea::horizontal()
                 .id_salt(id.with("_scroll"))
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                let Table { header, rows } = parse_table(events);
+                    // Строки — сверху вниз: родитель (абзац `egui_commonmark`) раскладывает
+                    // слева направо с переносом, и рамка унаследовала бы это.
+                    frame.show(ui, |ui| ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        let row_height = ui.spacing().interact_size.y;
+                        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+                        let stripe = ui.visuals().faint_bg_color;
+                        let left = ui.cursor().left();
+                        let top = ui.cursor().top();
+                        let mut header_bottom = top;
+                        let mut bottom = top;
 
-                egui::Grid::new(id).striped(true).show(ui, |ui| {
-                    for col in header {
-                        ui.horizontal(|ui| {
-                            for (e, src_span) in col {
-                                let tmp_start =
-                                    std::mem::replace(&mut self.line.should_start_newline, false);
-                                let tmp_end =
-                                    std::mem::replace(&mut self.line.should_end_newline, false);
-                                self.event(ui, e, src_span, cache, options, max_width);
-                                self.line.should_start_newline = tmp_start;
-                                self.line.should_end_newline = tmp_end;
-                            }
-                        });
-                    }
-
-                    ui.end_row();
-
-                    for row in rows {
-                        for col in row {
-                            ui.horizontal(|ui| {
-                                for (e, src_span) in col {
+                        for (r, row) in std::iter::once(header).chain(rows).enumerate() {
+                            let row_top = ui.cursor().top();
+                            let background = ui.painter().add(egui::Shape::Noop);
+                            let mut height: f32 = 0.0;
+                            let mut x = left;
+                            for (c, cell) in row.into_iter().enumerate() {
+                                let width = widths.get(c).copied().unwrap_or(0.0);
+                                let rect = egui::Rect::from_min_size(
+                                    egui::pos2(x + pad.x, row_top + pad.y),
+                                    // Как `horizontal_wrapped`: область высотой в одну строку,
+                                    // строки переноса наращиваются вниз (бесконечная высота
+                                    // дала бы NaN, слишком большая — одну огромную строку).
+                                    egui::vec2((width - 2.0 * pad.x).max(1.0), row_height),
+                                );
+                                let mut cell_ui = ui.new_child(
+                                    egui::UiBuilder::new()
+                                        .id_salt((r, c))
+                                        .max_rect(rect)
+                                        .layout(
+                                            egui::Layout::left_to_right(egui::Align::Center)
+                                                .with_main_wrap(true),
+                                        ),
+                                );
+                                // Заголовок — жирным, как на GitHub.
+                                let was_strong = self.text_style.strong;
+                                self.text_style.strong |= r == 0;
+                                for (e, src_span) in cell {
+                                    // Служебные события таблицы: `parse_row` кладёт конец
+                                    // предыдущей ячейки в начало следующей, а его обработчик
+                                    // рисует пробел-отступ для `Grid` — здесь отступ задаёт `pad`.
+                                    if matches!(
+                                        e,
+                                        pulldown_cmark::Event::Start(
+                                            pulldown_cmark::Tag::TableCell
+                                                | pulldown_cmark::Tag::TableRow
+                                        ) | pulldown_cmark::Event::End(
+                                            pulldown_cmark::TagEnd::TableCell
+                                                | pulldown_cmark::TagEnd::TableRow
+                                        )
+                                    ) {
+                                        continue;
+                                    }
                                     let tmp_start = std::mem::replace(
                                         &mut self.line.should_start_newline,
                                         false,
                                     );
                                     let tmp_end =
                                         std::mem::replace(&mut self.line.should_end_newline, false);
-                                    self.event(ui, e, src_span, cache, options, max_width);
+                                    self.event(
+                                        &mut cell_ui,
+                                        e,
+                                        src_span,
+                                        cache,
+                                        options,
+                                        rect.width(),
+                                    );
                                     self.line.should_start_newline = tmp_start;
                                     self.line.should_end_newline = tmp_end;
                                 }
-                            });
+                                self.text_style.strong = was_strong;
+                                height = height.max(cell_ui.min_rect().height() + 2.0 * pad.y);
+                                x += width;
+                            }
+                            let row_rect = egui::Rect::from_min_size(
+                                egui::pos2(left, row_top),
+                                egui::vec2(total, height),
+                            );
+                            // Полосы — на каждой второй строке тела таблицы.
+                            if r > 0 && r % 2 == 0 {
+                                ui.painter().set(
+                                    background,
+                                    egui::Shape::rect_filled(row_rect, 0.0, stripe),
+                                );
+                            }
+                            ui.advance_cursor_after_rect(row_rect);
+                            if r == 0 {
+                                header_bottom = row_rect.bottom();
+                            }
+                            bottom = row_rect.bottom();
                         }
 
-                        ui.end_row();
-                    }
-                });
-            });
+                        // Линия под заголовком и вертикальные разделители столбцов.
+                        let painter = ui.painter();
+                        painter.hline(left..=left + total, header_bottom, stroke);
+                        let mut x = left;
+                        for width in widths.iter().take(widths.len().saturating_sub(1)) {
+                            x += width;
+                            painter.vline(x, top..=bottom, stroke);
+                        }
+                    }));
                 });
 
             self.is_table = false;
@@ -891,4 +977,56 @@ fn delayed_events_blockquote<'e>(
         }
     }
     collected
+}
+
+/// Markdowntown patch: минимальная (самое длинное слово) и естественная (в одну строку)
+/// ширина содержимого ячейки таблицы. Приблизительно: по тексту и коду ячейки.
+fn measure_cell(ui: &Ui, cell: &[(pulldown_cmark::Event<'_>, Range<usize>)]) -> (f32, f32) {
+    let body = TextStyle::Body.resolve(ui.style());
+    let mono = TextStyle::Monospace.resolve(ui.style());
+    let width = |text: &str, font: &egui::FontId| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let (mut min, mut natural) = (0.0f32, 0.0f32);
+    for (event, _) in cell {
+        let (text, font) = match event {
+            pulldown_cmark::Event::Text(t) => (t.as_ref(), &body),
+            pulldown_cmark::Event::Code(t) | pulldown_cmark::Event::InlineMath(t) => {
+                (t.as_ref(), &mono)
+            }
+            _ => continue,
+        };
+        natural += width(text, font);
+        for word in text.split_whitespace() {
+            min = min.max(width(word, font));
+        }
+    }
+    (min, natural.max(min))
+}
+
+/// Markdowntown patch: ширины столбцов таблицы для доступной ширины `available` —
+/// как автоматическая раскладка таблиц в браузере. Помещаются естественные ширины —
+/// они и есть; иначе каждый столбец получает минимум, а остаток делится
+/// пропорционально тому, насколько столбцу нужно больше минимума (длинные ячейки
+/// переносятся, короткие — нет). Не помещаются даже минимумы — минимумы
+/// (таблица прокручивается по горизонтали).
+pub fn column_widths(min: &[f32], natural: &[f32], available: f32) -> Vec<f32> {
+    let natural_total: f32 = natural.iter().sum();
+    if natural_total <= available {
+        return natural.to_vec();
+    }
+    let min_total: f32 = min.iter().sum();
+    let extra = available - min_total;
+    let wanted: f32 = natural.iter().zip(min).map(|(n, m)| n - m).sum();
+    if extra <= 0.0 || wanted <= 0.0 {
+        return min.to_vec();
+    }
+    min.iter()
+        .zip(natural)
+        .map(|(m, n)| m + extra * (n - m) / wanted)
+        .collect()
 }

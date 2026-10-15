@@ -12,6 +12,13 @@ use egui::{FontData, FontDefinitions, FontFamily};
 /// Семейство шрифта редактора.
 const EDITOR_FAMILY: &str = "editor";
 
+/// Семейство жирного шрифта заголовков превью (его ищет патч `egui_commonmark`).
+const HEADING_FAMILY: &str = "heading";
+
+/// Жирное начертание того же Ubuntu, что у основного текста egui (Ubuntu Light);
+/// вшито в exe — в Windows его нет. Лицензия — `licenses/ubuntu-font/`.
+const HEADING_FONT: &[u8] = include_bytes!("../assets/fonts/Ubuntu-Bold.ttf");
+
 /// Запасные шрифты для символов и эмодзи (↑ ↓ ✓ → и т.п.).
 const FALLBACK_FILES: &[(&str, &str)] = &[
     ("Segoe UI Symbol", "seguisym.ttf"),
@@ -96,6 +103,16 @@ pub fn install(ctx: &egui::Context, editor_font: Option<&str>) {
     }
     editor.extend(defs.families[&FontFamily::Monospace].iter().cloned());
     defs.families.insert(editor_family(), editor);
+
+    // Заголовки: Ubuntu Bold, недостающие символы — из обычных пропорциональных.
+    defs.font_data.insert(
+        HEADING_FAMILY.to_owned(),
+        Arc::new(FontData::from_static(HEADING_FONT)),
+    );
+    let mut heading = vec![HEADING_FAMILY.to_owned()];
+    heading.extend(defs.families[&FontFamily::Proportional].iter().cloned());
+    defs.families
+        .insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
 
     ctx.set_fonts(defs);
 }

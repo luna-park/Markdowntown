@@ -76,6 +76,11 @@ use egui::{self, Id};
 
 mod parsers;
 
+/// Markdowntown patch: ширины столбцов таблицы — публично, чтобы тесты были в приложении
+/// (у vendor-копии тесты не запускаются: она не член workspace).
+#[doc(hidden)]
+pub use parsers::pulldown::column_widths;
+
 pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};

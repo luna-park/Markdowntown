@@ -76,7 +76,8 @@ Remove-Item -Recurse -Force "target\package" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$stage\licenses" | Out-Null
 Copy-Item $exe, README.md, LICENSE-MIT, LICENSE-APACHE $stage
 Copy-Item $licenses $stage
-Copy-Item -Recurse licenses\katex-fonts "$stage\licenses\katex-fonts"
+# Лицензии шрифтов, которые cargo-about не находит сам (KaTeX, Ubuntu Bold).
+Copy-Item -Recurse licenses\* "$stage\licenses\"
 # Примеры: все элементы Markdown (showcase.md ссылается на images\ и mermaid.md).
 Copy-Item -Recurse examples "$stage\examples"
 
