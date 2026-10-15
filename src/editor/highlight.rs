@@ -279,6 +279,15 @@ mod tests {
     }
 
     #[test]
+    fn nested_list_markers() {
+        let p = Palette::from_visuals(&egui::Visuals::dark());
+        let text = "- top\n  - nested\n    - deep\n";
+        assert_eq!(color_of(text, "- n"), p.list_marker);
+        assert_eq!(color_of(text, "- d"), p.list_marker);
+        assert_eq!(color_of(text, "nested"), p.text);
+    }
+
+    #[test]
     #[allow(clippy::single_range_in_vec_init)] // один диапазон, а не диапазон чисел
     fn sections_cover_text_without_gaps() {
         let text = "# Заголовок\n\n- [x] пункт **жирный**\n\n> цитата\n";

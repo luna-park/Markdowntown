@@ -113,10 +113,11 @@ impl Editor {
             self.handle_editing_keys(&ctx, doc, text_id);
         }
 
-        let font = egui::FontId::monospace(self.font_size.clamp(
-            *crate::style::EDITOR_FONT_SIZE_RANGE.start(),
-            *crate::style::EDITOR_FONT_SIZE_RANGE.end(),
-        ));
+        let range = crate::style::EDITOR_FONT_SIZE_RANGE;
+        let font = egui::FontId::new(
+            self.font_size.clamp(*range.start(), *range.end()),
+            crate::fonts::editor_family(),
+        );
         let palette = Palette::from_visuals(ui.visuals());
         let line_count = doc.text.bytes().filter(|&b| b == b'\n').count() + 1;
         let digit_width = ctx.fonts_mut(|f| f.glyph_width(&font, '0'));

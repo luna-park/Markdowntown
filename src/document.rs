@@ -61,6 +61,30 @@ impl From<io::Error> for LoadError {
     }
 }
 
+/// Отпечаток файла на диске: по нему замечаем изменения другими программами.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiskStamp {
+    modified: std::time::SystemTime,
+    len: u64,
+}
+
+impl DiskStamp {
+    fn read(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: meta.modified().ok()?,
+            len: meta.len(),
+        })
+    }
+}
+
+/// Что случилось с файлом на диске с момента последнего чтения или записи.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskChange {
+    Modified,
+    Removed,
+}
+
 pub struct Document {
     pub text: String,
     /// Уникален для каждого созданного/загруженного документа.
@@ -70,6 +94,8 @@ pub struct Document {
     dirty: bool,
     /// Растёт при каждом изменении текста — ключ для кэшей превью.
     revision: u64,
+    /// Состояние файла при последнем чтении/записи (или принятое пользователем).
+    disk: Option<DiskStamp>,
 }
 
 impl Document {
@@ -81,7 +107,22 @@ impl Document {
             format: FileFormat::default(),
             dirty: false,
             revision: 0,
+            disk: None,
         }
+    }
+
+    /// Документ из черновика восстановления: текст не совпадает с файлом, поэтому
+    /// сразу «изменён». Формат (BOM, EOL) берётся из файла, если он ещё существует.
+    pub fn recovered(path: Option<PathBuf>, text: String) -> Self {
+        let on_disk = path.as_deref().and_then(|p| Self::load(p).ok());
+        let mut doc = Self::new_untitled(text);
+        if let Some(disk) = on_disk {
+            doc.format = disk.format;
+            doc.disk = disk.disk;
+        }
+        doc.path = path;
+        doc.dirty = true;
+        doc
     }
 
     pub fn load(path: &Path) -> Result<Self, LoadError> {
@@ -94,7 +135,44 @@ impl Document {
             format,
             dirty: false,
             revision: 0,
+            disk: DiskStamp::read(path),
         })
+    }
+
+    /// Перечитывает файл с диска, отбрасывая несохранённые правки.
+    pub fn reload(&mut self) -> Result<(), LoadError> {
+        let path = self
+            .path
+            .clone()
+            .ok_or_else(|| io::Error::other("document has no path"))?;
+        let fresh = Self::load(&path)?;
+        self.text = fresh.text;
+        self.format = fresh.format;
+        self.disk = fresh.disk;
+        self.dirty = false;
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Изменился ли файл на диске с последнего чтения/записи. Дешёвый вызов
+    /// (только метаданные) — можно опрашивать раз в секунду.
+    pub fn disk_change(&self) -> Option<DiskChange> {
+        let path = self.path.as_deref()?;
+        let known = self.disk?;
+        match DiskStamp::read(path) {
+            None => Some(DiskChange::Removed),
+            Some(now) if now != known => Some(DiskChange::Modified),
+            Some(_) => None,
+        }
+    }
+
+    /// Пользователь решил оставить свою версию: больше не сообщать об этом изменении
+    /// файла (документ остаётся изменённым).
+    pub fn accept_disk_state(&mut self) {
+        if let Some(path) = &self.path {
+            self.disk = DiskStamp::read(path);
+        }
+        self.dirty = true;
     }
 
     /// Сохраняет в текущий путь. Документ без пути сохранить нельзя — используйте [`Self::save_as`].
@@ -110,6 +188,7 @@ impl Document {
         write_atomic(path, &encode(&self.text, self.format))?;
         self.path = Some(path.to_owned());
         self.dirty = false;
+        self.disk = DiskStamp::read(path);
         Ok(())
     }
 
@@ -272,6 +351,61 @@ mod tests {
         assert!(matches!(err, LoadError::NotUtf8 { offset: 3 }));
         let err = decode(b"\xEF\xBB\xBFok \xFF").unwrap_err();
         assert!(matches!(err, LoadError::NotUtf8 { offset: 6 }));
+    }
+
+    #[test]
+    fn detects_external_changes_and_reloads() {
+        let dir = std::env::temp_dir().join(format!("markdowntown-disk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.md");
+        std::fs::write(&path, "one\n").unwrap();
+
+        let mut doc = Document::load(&path).unwrap();
+        assert_eq!(doc.disk_change(), None);
+
+        // Другая длина — изменение видно даже при грубом разрешении времени.
+        std::fs::write(&path, "two two\n").unwrap();
+        assert_eq!(doc.disk_change(), Some(DiskChange::Modified));
+
+        let version = doc.version();
+        doc.reload().unwrap();
+        assert_eq!(doc.text, "two two\n");
+        assert!(!doc.is_dirty());
+        assert_ne!(doc.version(), version, "preview must re-render");
+        assert_eq!(doc.disk_change(), None);
+
+        // Своё сохранение — не внешнее изменение.
+        doc.text.push_str("three\n");
+        doc.mark_edited();
+        doc.save().unwrap();
+        assert_eq!(doc.disk_change(), None);
+
+        std::fs::write(&path, "external\n").unwrap();
+        doc.accept_disk_state();
+        assert_eq!(doc.disk_change(), None);
+        assert!(doc.is_dirty());
+
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(doc.disk_change(), Some(DiskChange::Removed));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recovered_document_is_dirty_and_keeps_file_format() {
+        let dir = std::env::temp_dir().join(format!("markdowntown-rec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.md");
+        std::fs::write(&path, b"a\r\nb\r\n").unwrap();
+
+        let doc = Document::recovered(Some(path.clone()), "draft\n".into());
+        assert!(doc.is_dirty());
+        assert_eq!(doc.text, "draft\n");
+        assert_eq!(doc.format().line_ending, LineEnding::CrLf);
+        assert_eq!(doc.path(), Some(path.as_path()));
+
+        let untitled = Document::recovered(None, "x".into());
+        assert!(untitled.is_dirty() && untitled.path().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
