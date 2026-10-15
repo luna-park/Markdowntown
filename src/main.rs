@@ -6,6 +6,8 @@ mod diagram;
 mod document;
 mod editor;
 mod export;
+#[cfg(windows)]
+mod file_assoc;
 mod fonts;
 mod gpu;
 mod logging;

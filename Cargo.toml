@@ -40,3 +40,8 @@ egui_commonmark = { path = "vendor/egui_commonmark" }
 
 [build-dependencies]
 winresource = "0.1.34"
+
+# Ассоциация с .md: реестр HKCU (winreg) и уведомление Проводника (SHChangeNotify).
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+winreg = "0.56.0"

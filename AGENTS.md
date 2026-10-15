@@ -95,6 +95,10 @@ cargo fmt             # форматирование
   `viewBox`), локальных картинок (data URI) и raw HTML (текстом). `PageTheme` — по теме
   приложения: Auto (`prefers-color-scheme`) / Light / Dark; печать светлая. В приложении — в фоновом
   потоке. Примеры для просмотра: `cargo test export_examples -- --ignored` → `target\export\`.
+- `src/file_assoc.rs` — ассоциация с `.md` / `.markdown` в HKCU (`winreg`): `register`,
+  `unregister`, `status` (в т.ч. «зарегистрирована другая копия»), открытие Параметров →
+  Приложения по умолчанию. Только Windows (`#[cfg(windows)]`); тесты пишут в отдельную
+  ветку `HKCU\Software\Markdowntown-test-*`, а не в настоящие ассоциации.
 - `src/scroll_sync.rs` — `ScrollSync`: ведущая/ведомая панель, сопоставление через байт
   документа в верхней строке; `PreviewGeometry` — якоря превью.
 - `src/viewer.rs` — `DiagramViewer`: окно просмотра диаграммы крупно (масштаб вокруг точки,
@@ -115,6 +119,7 @@ cargo fmt             # форматирование
 | `merman` | Mermaid → SVG (версия зафиксирована `=0.9.0`) |
 | `resvg` | SVG → растр; версия как у `egui_extras` (0.45), чтобы не было дубликата |
 | `serde_json` | конфиг темы для `merman` |
+| `winreg`, `windows-sys` | ассоциация с `.md`: реестр HKCU и `SHChangeNotify` (только Windows) |
 | `syntect` | подсветка кода в экспорте HTML (та же версия и features, что у `egui_commonmark`) |
 
 `egui_commonmark` подключён с features `better_syntax_highlighting`, `svg`, `fetch`

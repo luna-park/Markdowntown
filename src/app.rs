@@ -606,6 +606,8 @@ impl MarkdowntownApp {
                 {
                     self.export_html();
                 }
+                #[cfg(windows)]
+                ui.menu_button("File association", |ui| self.association_menu(ui));
                 ui.separator();
                 if ui.button("Exit").clicked() {
                     self.request(Action::Exit);
@@ -617,6 +619,63 @@ impl MarkdowntownApp {
                 ui.weak("luna-park discoteque 2026");
             });
         });
+    }
+
+    /// Регистрация Markdowntown для `.md` / `.markdown` (HKCU). Приложение по умолчанию
+    /// пользователь выбирает сам в Параметрах Windows — программно это запрещено.
+    #[cfg(windows)]
+    fn association_menu(&mut self, ui: &mut egui::Ui) {
+        use crate::file_assoc::{self, Location, Status};
+
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                ui.weak(format!("Unknown program path: {e}"));
+                return;
+            }
+        };
+        let loc = Location::user();
+        let status = file_assoc::status(&loc, &exe);
+        match &status {
+            Status::NotRegistered => ui.weak("Not registered for .md files"),
+            Status::Registered => ui.weak("Registered for .md and .markdown"),
+            Status::OtherCopy(path) => ui
+                .weak("Registered for another copy")
+                .on_hover_text(path.display().to_string()),
+        };
+        ui.separator();
+
+        let register_label = match status {
+            Status::OtherCopy(_) => "Register this copy",
+            _ => "Register for .md files",
+        };
+        if status != Status::Registered && ui.button(register_label).clicked() {
+            let result = file_assoc::register(&loc, &exe).and_then(|()| {
+                file_assoc::notify_shell();
+                file_assoc::open_default_apps_settings()
+            });
+            self.set_status(match result {
+                Ok(()) => {
+                    "Registered. Choose Markdowntown as the default app in Windows Settings".into()
+                }
+                Err(e) => format!("Cannot register file association: {e}"),
+            });
+        }
+        if status != Status::NotRegistered {
+            if ui.button("Choose default app…").clicked()
+                && let Err(e) = file_assoc::open_default_apps_settings()
+            {
+                self.set_status(format!("Cannot open Windows Settings: {e}"));
+            }
+            if ui.button("Unregister").clicked() {
+                let result = file_assoc::unregister(&loc);
+                file_assoc::notify_shell();
+                self.set_status(match result {
+                    Ok(()) => "File association removed".into(),
+                    Err(e) => format!("Cannot remove file association: {e}"),
+                });
+            }
+        }
     }
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
