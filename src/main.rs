@@ -6,6 +6,7 @@ mod diagram;
 mod document;
 mod editor;
 mod fonts;
+mod gpu;
 mod logging;
 mod preview;
 mod recovery;
@@ -45,6 +46,8 @@ fn main() -> eframe::Result {
         // Настройки и положение окна — в каталоге данных (portable: рядом с exe).
         // Несмотря на документацию eframe, это путь к файлу, а не к папке.
         persistence_path: data_dir.as_ref().map(|dir| dir.join("app.ron")),
+        // Свой выбор графического адаптера: DX12 и встроенная видеокарта в приоритете.
+        wgpu_options: gpu::wgpu_options(),
         ..Default::default()
     };
 

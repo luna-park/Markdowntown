@@ -100,6 +100,8 @@ pub struct MarkdowntownApp {
 impl MarkdowntownApp {
     pub fn new(cc: &eframe::CreationContext<'_>, data_dir: Option<PathBuf>) -> Self {
         let ctx = &cc.egui_ctx;
+        // Графика инициализирована — дальше сбои уже не в драйвере при запуске.
+        log::info!("graphics initialized, starting UI");
         crate::style::apply_global(ctx);
 
         let settings: Settings = cc
