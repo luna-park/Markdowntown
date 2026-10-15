@@ -52,6 +52,9 @@ fn dark_config() -> serde_json::Value {
     for (i, color) in PIE.iter().enumerate() {
         vars.insert(format!("pie{}", i + 1), (*color).into());
     }
+    // Корень mindmap и основная ветка gitGraph: штатно серый с тёмным текстом.
+    vars.insert("git0".into(), "#4b6a9b".into());
+    vars.insert("gitBranchLabel0".into(), "#ffffff".into());
     vars.insert("pieOpacity".into(), "0.85".into());
     vars.insert("pieSectionTextColor".into(), "#ffffff".into());
     vars.insert("pieStrokeColor".into(), "#1b1b1b".into());
@@ -138,5 +141,22 @@ mod tests {
         .unwrap();
         assert!(!svg.contains("#0b0000"), "stock dark pie color leaked");
         assert!(svg.contains("#4e79a7"), "custom pie palette not applied");
+    }
+
+    #[test]
+    fn dark_mindmap_root_is_readable() {
+        let svg = render(
+            &MermanRenderer::new(),
+            "mindmap
+  root((Root))
+    Child",
+            DiagramTheme::Dark,
+        )
+        .unwrap();
+        assert!(
+            svg.contains(".section-root rect,#mindmap .section-root path,#mindmap .section-root circle,#mindmap .section-root polygon{fill:#4b6a9b;}"),
+            "root fill not overridden"
+        );
+        assert!(svg.contains(".section-root text{fill:#ffffff;}"));
     }
 }
