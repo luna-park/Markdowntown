@@ -7,6 +7,8 @@ A Markdown editor for Windows with a live preview and Mermaid diagrams.
   syntax-highlighted code, local and remote images
 - Mermaid diagrams rendered right in the preview — no browser or Node.js needed
 - Synchronized scrolling between the editor and the preview
+- Export to a single self-contained HTML file (styles, diagrams and local images inside);
+  print it from the browser to get a PDF
 - Light and dark themes, adjustable fonts, crash recovery for unsaved changes
 - Portable: one `.exe`, nothing to install
 
@@ -28,12 +30,23 @@ falls back to software rendering.
 | Action | Keys |
 |---|---|
 | New / Open / Save / Save As | Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S |
+| Export to HTML | Ctrl+Shift+E |
 | Bold / Italic / Inline code / Link | Ctrl+B / Ctrl+I / Ctrl+E / Ctrl+K |
 | Find / Replace | Ctrl+F / Ctrl+H |
 | Zoom the whole UI | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Continue a list or quote | Enter at the end of an item (Enter on an empty item ends the list) |
 
 Click a diagram in the preview to open it in a zoomable window.
+
+## Opening .md files with Markdowntown
+
+**File → File association → Register for .md files** adds Markdowntown to the
+"Open with" list for `.md` and `.markdown` files (for your user account only, no
+administrator rights needed) and opens Windows Settings, where you choose Markdowntown as
+the default app — Windows does not let programs do this themselves.
+
+If you move `markdowntown.exe` to another folder, register again from the new copy.
+**Unregister** removes everything; do it before deleting the app.
 
 ## Where settings are stored
 
