@@ -28,6 +28,14 @@ cargo fmt             # форматирование
 Иконка: исходник `assets/icon.svg`, файлы `icon.ico` / `icon-256.png` генерируются
 `cargo test generate_icon_files -- --ignored` и коммитятся.
 
+Выпуск версии X.Y.Z:
+1. Версия в `Cargo.toml`, пункт в ROADMAP (фаза 6), описание для пользователей
+   `docs/releases/vX.Y.Z.md` (по-английски, как прошлые).
+2. `.\package.ps1`; распаковать `dist\Markdowntown-X.Y.Z-windows-x64.zip`, запустить exe.
+3. Коммит «Release X.Y.Z: …», тег `git tag -a vX.Y.Z -m "Markdowntown X.Y.Z"`, push ветки и тега.
+4. Релиз на GitHub (`gh`, вход — `gh auth login`):
+   `gh release create vX.Y.Z dist\Markdowntown-X.Y.Z-windows-x64.zip --title "Markdowntown X.Y.Z" --notes-file docs\releases\vX.Y.Z.md --latest`
+
 Журнал — `data\markdowntown.log` рядом с exe (для `cargo run` — `target\debug\data\`),
 перезаписывается при каждом запуске; уровень — `RUST_LOG`.
 
