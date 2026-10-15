@@ -155,7 +155,7 @@ cargo fmt             # форматирование
 | `merman` | Mermaid → SVG (версия зафиксирована `=0.9.0`) |
 | `resvg` | SVG → растр; версия как у `egui_extras` (0.45), чтобы не было дубликата |
 | `serde_json` | конфиг темы для `merman` |
-| `winreg`, `windows-sys` | ассоциация с `.md`: реестр HKCU и `SHChangeNotify` (только Windows) |
+| `winreg`, `windows-sys` | ассоциация с `.md`: реестр HKCU, `SHChangeNotify`; `ShellExecuteW` — открыть файл или адрес (`ms-settings:`) обработчиком Windows (`links::shell_open`; только Windows) |
 | `ratex-*` | формулы LaTeX → SVG; версия — как у `merman` (`=0.1.14`), иначе дубликат |
 | `syntect` | подсветка кода в экспорте HTML (та же версия и features, что у `egui_commonmark`) |
 

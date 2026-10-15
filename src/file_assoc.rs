@@ -190,12 +190,8 @@ pub fn notify_shell() {
 /// Открывает Параметры → Приложения по умолчанию. В Windows 11 — сразу страницу
 /// Markdowntown, в Windows 10 параметр игнорируется (общая страница).
 pub fn open_default_apps_settings() -> io::Result<()> {
-    std::process::Command::new("explorer.exe")
-        .arg(format!(
-            "ms-settings:defaultapps?registeredAppUser={APP_NAME}"
-        ))
-        .spawn()
-        .map(|_| ())
+    let uri = format!("ms-settings:defaultapps?registeredAppUser={APP_NAME}");
+    crate::links::shell_open(std::ffi::OsStr::new(&uri))
 }
 
 #[cfg(test)]

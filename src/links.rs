@@ -152,10 +152,38 @@ pub fn open_local(path: &Path) -> String {
 
 #[cfg(windows)]
 fn open_with_shell(path: &Path) -> std::io::Result<()> {
-    std::process::Command::new("explorer.exe")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
+    shell_open(path.as_os_str())
+}
+
+/// Открыть файл, папку или адрес (`ms-settings:…`) обработчиком Windows по умолчанию —
+/// как двойной клик в Проводнике. Через `ShellExecuteW`, а не `explorer.exe <аргумент>`:
+/// Проводник принимает не всякий адрес и молча открывает вместо него «Документы».
+#[cfg(windows)]
+pub fn shell_open(target: &std::ffi::OsStr) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let target: Vec<u16> = target.encode_wide().chain(Some(0)).collect();
+    let verb: Vec<u16> = "open".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: строки завершены нулём и живут до конца вызова; окно-владелец не нужно.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // По документации успех — значение больше 32, иначе — код ошибки.
+    let code = result as isize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("ShellExecute error {code}")))
+    }
 }
 
 #[cfg(windows)]
