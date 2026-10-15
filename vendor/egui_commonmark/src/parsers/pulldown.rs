@@ -426,9 +426,12 @@ impl CommonMarkViewerInternal {
         ui: &mut Ui,
     ) {
         if self.is_blockquote {
-            let mut collected_events = delayed_events(events, |tag| {
-                matches!(tag, pulldown_cmark::TagEnd::BlockQuote(_))
-            });
+            // Markdowntown patch: вложенные цитаты. В оригинале события собирались до первого
+            // `End(BlockQuote)` (конца вложенной цитаты) и рисовались через `event`, без
+            // обёрток — вложенная цитата не получала свою полосу. Теперь сбор учитывает
+            // глубину, а содержимое идёт через `process_event`, как у пунктов списка.
+            self.is_blockquote = false;
+            let mut collected_events = delayed_events_blockquote(events);
             self.line.try_insert_start(ui);
 
             // Currently the blockquotes are made in such a way that they need a newline at the end
@@ -437,17 +440,14 @@ impl CommonMarkViewerInternal {
             self.line.should_not_start_newline_forced = false;
             if let Some(alert) = parse_alerts(&options.alerts, &mut collected_events) {
                 egui_commonmark_backend::alert_ui(alert, ui, |ui| {
-                    for (event, src_span) in collected_events {
-                        self.event(ui, event, src_span, cache, options, max_width);
-                    }
+                    self.process_events(ui, collected_events, cache, options, max_width);
                 })
             } else {
                 blockquote(ui, ui.visuals().weak_text_color(), |ui| {
-                    self.text_style.quote = true;
-                    for (event, src_span) in collected_events {
-                        self.event(ui, event, src_span, cache, options, max_width);
-                    }
-                    self.text_style.quote = false;
+                    // Вложенная цитата не должна снимать признак цитаты с текста внешней.
+                    let was_quote = std::mem::replace(&mut self.text_style.quote, true);
+                    self.process_events(ui, collected_events, cache, options, max_width);
+                    self.text_style.quote = was_quote;
                 });
             }
 
@@ -456,7 +456,21 @@ impl CommonMarkViewerInternal {
             }
 
             self.line.try_insert_end(ui);
-            self.is_blockquote = false;
+        }
+    }
+
+    /// Markdowntown patch: рисует собранные события с обработкой вложенных блоков.
+    fn process_events(
+        &mut self,
+        ui: &mut Ui,
+        collected: Vec<(pulldown_cmark::Event, Range<usize>)>,
+        cache: &mut CommonMarkCache,
+        options: &CommonMarkOptions,
+        max_width: f32,
+    ) {
+        let mut events = collected.into_iter().enumerate().peekable();
+        while let Some((_, (event, src_span))) = events.next() {
+            self.process_event(ui, &mut events, event, src_span, cache, options, max_width);
         }
     }
 
@@ -838,4 +852,35 @@ impl CommonMarkViewerInternal {
             self.line.try_insert_end(ui);
         }
     }
+}
+
+/// Markdowntown patch: события цитаты до её собственного `End(BlockQuote)` — с учётом
+/// вложенных цитат (в отличие от `delayed_events`, который остановится на первом конце).
+fn delayed_events_blockquote<'e>(
+    events: &mut impl Iterator<Item = EventIteratorItem<'e>>,
+) -> Vec<(pulldown_cmark::Event<'e>, Range<usize>)> {
+    let mut depth = 0usize;
+    let mut collected = Vec::new();
+    for (_, (event, range)) in events {
+        let end = match &event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::BlockQuote(_)) => {
+                depth += 1;
+                false
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::BlockQuote(_)) => {
+                if depth == 0 {
+                    true
+                } else {
+                    depth -= 1;
+                    false
+                }
+            }
+            _ => false,
+        };
+        collected.push((event, range));
+        if end {
+            break;
+        }
+    }
+    collected
 }
