@@ -128,6 +128,8 @@ Remote image:
 
 ## Mermaid
 
+All diagram types are in [mermaid.md](mermaid.md).
+
 ```mermaid
 flowchart TD
     A[Start] --> B{Is it working?}

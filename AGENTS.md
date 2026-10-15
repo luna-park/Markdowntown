@@ -28,9 +28,15 @@ cargo fmt             # форматирование
 - `src/segment.rs` — `split()`: документ → сегменты Markdown / Mermaid (только блоки верхнего
   уровня) с байтовыми диапазонами и номерами строк.
 - `src/preview.rs` — `Preview`: кэш сегментов по `Document::version()`, рендер Markdown через
-  `egui_commonmark` (`show_mut` — чекбоксы task-list пишут в исходник), mermaid — заглушка.
-- `examples/showcase.md` — документ со всеми поддерживаемыми элементами для ручной проверки
-  (`cargo run -- examples/showcase.md`).
+  `egui_commonmark` (`show_mut` — чекбоксы task-list пишут в исходник), mermaid-блоки через
+  `DiagramService` с debounce и показом предыдущей версии.
+- `src/diagram/` — рендер Mermaid:
+  - `mod.rs` — трейт `DiagramRenderer`, `DiagramTheme`;
+  - `merman_backend.rs` — реализация на `merman` (по `Renderer` на тему);
+  - `raster.rs` — SVG → `egui::ColorImage` через `resvg` (системные шрифты, лимит 8192 px);
+  - `service.rs` — `DiagramService`: фоновый поток, кэш текстур по `DiagramKey`.
+- `examples/showcase.md` — все поддерживаемые элементы Markdown, `examples/mermaid.md` —
+  все проверенные типы диаграмм (`cargo run -- examples/<файл>.md`).
 
 ## Зависимости
 
@@ -42,6 +48,9 @@ cargo fmt             # форматирование
 | `pulldown-cmark` | разбор Markdown для сегментации (опции — как в `egui_commonmark`) |
 | `egui_extras` | загрузчики картинок; feature `svg_text` — текст внутри SVG |
 | `image` | декодеры PNG/JPEG/GIF/WebP/BMP для картинок в превью |
+| `merman` | Mermaid → SVG (версия зафиксирована `=0.9.0`) |
+| `resvg` | SVG → растр; версия как у `egui_extras` (0.45), чтобы не было дубликата |
+| `serde_json` | конфиг темы для `merman` |
 
 `egui_commonmark` подключён с features `better_syntax_highlighting`, `svg`, `fetch`
 (картинки по URL; HTTP через `ureq` + rustls, без OpenSSL).
@@ -108,7 +117,7 @@ cargo fmt             # форматирование
 - SVG получать только через `SvgPipeline::resvg_safe()` — `resvg` не поддерживает
   `<foreignObject>`, без этого пропадут подписи.
 - Цепочка: `merman` → SVG → `resvg` → текстура egui. Один `Renderer` (`Send + Sync`) в фоновом
-  потоке, кэш по хэшу (исходник + тема + ширина). Пока диаграмма не готова — показывать
+  потоке, кэш по хэшу (исходник + тема + `pixels_per_point`). Пока диаграмма не готова — показывать
   предыдущую версию; ошибки разбора показывать текстом.
 - Тема: `Engine::with_site_config` с `{"theme": "dark" | "default"}` по текущей теме egui.
 - Рендерер спрятан за трейтом `DiagramRenderer` (запасной вариант — крейт `mermaid-svg`).

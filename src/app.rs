@@ -9,7 +9,7 @@ A simple **Markdown** editor with a live _preview_.
 
 - Open a file with **Ctrl+O**, save with **Ctrl+S**
 - [x] GitHub-flavored Markdown
-- [ ] Mermaid diagrams (coming soon)
+- [x] Mermaid diagrams
 
 ```mermaid
 graph TD
