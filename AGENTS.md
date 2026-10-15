@@ -90,6 +90,11 @@ cargo fmt             # форматирование
   - `highlight.rs` — Markdown → `LayoutJob` (флаги на байт по событиям `pulldown-cmark`);
   - `commands.rs` — чистые функции правок: обёртка маркерами, ссылка, продолжение списков;
   - `search.rs` — поиск (в т.ч. без учёта регистра для кириллицы) и замена.
+- `src/export.rs` — экспорт в HTML: события `pulldown-cmark` → `push_html` с подменой
+  блоков кода (`syntect`, классы `hl-*`), mermaid (SVG в `<picture>`, размер из
+  `viewBox`), локальных картинок (data URI) и raw HTML (текстом). `PageTheme` — по теме
+  приложения: Auto (`prefers-color-scheme`) / Light / Dark; печать светлая. В приложении — в фоновом
+  потоке. Примеры для просмотра: `cargo test export_examples -- --ignored` → `target\export\`.
 - `src/scroll_sync.rs` — `ScrollSync`: ведущая/ведомая панель, сопоставление через байт
   документа в верхней строке; `PreviewGeometry` — якоря превью.
 - `src/viewer.rs` — `DiagramViewer`: окно просмотра диаграммы крупно (масштаб вокруг точки,
@@ -110,6 +115,7 @@ cargo fmt             # форматирование
 | `merman` | Mermaid → SVG (версия зафиксирована `=0.9.0`) |
 | `resvg` | SVG → растр; версия как у `egui_extras` (0.45), чтобы не было дубликата |
 | `serde_json` | конфиг темы для `merman` |
+| `syntect` | подсветка кода в экспорте HTML (та же версия и features, что у `egui_commonmark`) |
 
 `egui_commonmark` подключён с features `better_syntax_highlighting`, `svg`, `fetch`
 (картинки по URL; HTTP через `ureq` + rustls, без OpenSSL).

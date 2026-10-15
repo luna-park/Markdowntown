@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::document::{DiskChange, Document};
@@ -95,6 +96,8 @@ pub struct MarkdowntownApp {
     draft_written: Option<((u64, u64), Option<PathBuf>)>,
     last_draft_time: Instant,
     last_disk_check: Instant,
+    /// Идущий экспорт в HTML: итог (сообщение для статуса) придёт из фонового потока.
+    export: Option<mpsc::Receiver<String>>,
 }
 
 impl MarkdowntownApp {
@@ -138,6 +141,7 @@ impl MarkdowntownApp {
             draft_written: None,
             last_draft_time: Instant::now(),
             last_disk_check: Instant::now(),
+            export: None,
         };
         if let Some(path) = std::env::args_os().nth(1) {
             app.load(Path::new(&path));
@@ -228,6 +232,77 @@ impl MarkdowntownApp {
             (Err(e), _) => format!("Cannot save: {e}"),
         };
         self.set_status(status);
+    }
+
+    /// Экспорт в HTML: выбрать файл и собрать страницу в фоновом потоке
+    /// (каждая диаграмма рендерится дважды — для светлой и тёмной темы).
+    fn export_html(&mut self) {
+        if self.export.is_some() {
+            return;
+        }
+        let stem = Path::new(&self.doc.display_name()).file_stem().map_or_else(
+            || "document".to_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("HTML", &["html", "htm"])
+            .set_file_name(format!("{stem}.html"));
+        if let Some(dir) = self.doc.base_dir() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(path) = dialog.save_file() else {
+            return;
+        };
+
+        let theme = match self.settings.theme {
+            Theme::System => crate::export::PageTheme::Auto,
+            Theme::Light => crate::export::PageTheme::Light,
+            Theme::Dark => crate::export::PageTheme::Dark,
+        };
+        let text = self.doc.text.clone();
+        let base_dir = self.doc.base_dir().map(Path::to_owned);
+        let (tx, rx) = mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("html-export".into())
+            .spawn(move || {
+                let renderer = crate::diagram::MermanRenderer::new();
+                let out =
+                    crate::export::to_html(&text, base_dir.as_deref(), &stem, theme, &renderer);
+                let message = match crate::document::write_atomic(&path, out.html.as_bytes()) {
+                    Ok(()) => match out.warnings() {
+                        Some(w) => format!("Exported to {} ({w})", path.display()),
+                        None => format!("Exported to {}", path.display()),
+                    },
+                    Err(e) => format!("Cannot export to {}: {e}", path.display()),
+                };
+                let _ = tx.send(message);
+            });
+        match spawned {
+            Ok(_) => {
+                self.export = Some(rx);
+                self.set_status("Exporting to HTML…".into());
+            }
+            Err(e) => self.set_status(format!("Cannot export: {e}")),
+        }
+    }
+
+    /// Проверяет, не закончился ли экспорт.
+    fn poll_export(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.export else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(message) => {
+                self.export = None;
+                self.set_status(message);
+            }
+            Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // Поток завершился без ответа — паника, она уже в журнале.
+                self.export = None;
+                self.set_status("Cannot export: internal error (see log)".into());
+            }
+        }
     }
 
     /// Сообщение в строке статуса; оно же — запись в журнал (ошибки — предупреждением).
@@ -423,6 +498,7 @@ impl MarkdowntownApp {
         let open = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
         let save = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
         let save_as = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::S);
+        let export = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::E);
 
         // save_as проверяем первым: Ctrl+Shift+S иначе съест Ctrl+S
         if ctx.input_mut(|i| i.consume_shortcut(&save_as)) {
@@ -433,6 +509,8 @@ impl MarkdowntownApp {
             self.request(Action::Open(None));
         } else if ctx.input_mut(|i| i.consume_shortcut(&new)) {
             self.request(Action::New);
+        } else if ctx.input_mut(|i| i.consume_shortcut(&export)) {
+            self.export_html();
         }
     }
 
@@ -518,6 +596,15 @@ impl MarkdowntownApp {
                 }
                 if ui.button("Save As… (Ctrl+Shift+S)").clicked() {
                     self.save(true);
+                }
+                if ui
+                    .add_enabled(
+                        self.export.is_none(),
+                        egui::Button::new("Export HTML… (Ctrl+Shift+E)"),
+                    )
+                    .clicked()
+                {
+                    self.export_html();
                 }
                 ui.separator();
                 if ui.button("Exit").clicked() {
@@ -657,6 +744,7 @@ impl eframe::App for MarkdowntownApp {
         self.show_dialog(&ctx);
 
         self.check_disk(&ctx);
+        self.poll_export(&ctx);
         self.write_draft(&ctx);
         self.sync_settings(&ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));

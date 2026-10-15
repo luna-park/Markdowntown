@@ -35,7 +35,7 @@ pub struct Segment {
 }
 
 /// Те же опции, что у `egui_commonmark`, — чтобы границы блоков совпадали.
-fn parser_options() -> Options {
+pub(crate) fn parser_options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
@@ -43,7 +43,7 @@ fn parser_options() -> Options {
         | Options::ENABLE_DEFINITION_LIST
 }
 
-fn is_mermaid(info: &str) -> bool {
+pub(crate) fn is_mermaid(info: &str) -> bool {
     info.split_whitespace()
         .next()
         .is_some_and(|lang| lang.eq_ignore_ascii_case("mermaid"))

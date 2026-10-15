@@ -283,7 +283,7 @@ pub fn encode(text: &str, format: FileFormat) -> Vec<u8> {
 }
 
 /// Пишет во временный файл рядом и переименовывает: при сбое старый файл не портится.
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".markdowntown-tmp");
     let tmp = PathBuf::from(tmp);

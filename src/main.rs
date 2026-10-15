@@ -5,6 +5,7 @@ mod data_dir;
 mod diagram;
 mod document;
 mod editor;
+mod export;
 mod fonts;
 mod gpu;
 mod logging;
