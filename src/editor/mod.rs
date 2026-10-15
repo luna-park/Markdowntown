@@ -55,6 +55,8 @@ pub struct Editor {
     reveal: Option<usize>,
     /// Прокрутка, которую нужно применить в следующем кадре.
     pending_offset: Option<f32>,
+    /// Переход (оглавление): поставить этот байт в верхнюю строку панели.
+    jump: Option<usize>,
 }
 
 impl Default for Editor {
@@ -66,6 +68,7 @@ impl Default for Editor {
             has_focus: false,
             reveal: None,
             pending_offset: None,
+            jump: None,
         }
     }
 }
@@ -191,6 +194,13 @@ impl Editor {
             max_offset: (scroll_output.content_size.y - viewport).max(0.0),
         };
 
+        if let Some(byte) = self.jump.take() {
+            // Небольшой зазор сверху, чтобы заголовок не прилипал к краю.
+            let y = geometry.offset_for_byte(&doc.text, byte) - 8.0;
+            self.pending_offset = Some(y.max(0.0));
+            ctx.request_repaint();
+        }
+
         // Показать совпадение поиска: если не видно — прокрутить к нему.
         if let Some(byte) = self.reveal.take() {
             let y = geometry.offset_for_byte(&doc.text, byte);
@@ -200,6 +210,17 @@ impl Editor {
             }
         }
         geometry
+    }
+
+    /// Перейти к байту `byte`: курсор — туда, строка — вверху панели (оглавление).
+    pub fn jump_to(&mut self, ctx: &egui::Context, text: &str, byte: usize) {
+        let text_id = Id::new(TEXT_ID);
+        let mut state = TextEditState::load(ctx, text_id).unwrap_or_default();
+        let cursor = CCursor::new(byte_to_char(text, byte));
+        state.cursor.set_char_range(Some(CCursorRange::one(cursor)));
+        state.store(ctx, text_id);
+        ctx.memory_mut(|m| m.request_focus(text_id));
+        self.jump = Some(byte);
     }
 
     fn handle_search_shortcuts(&mut self, ctx: &egui::Context, doc: &Document, text_id: Id) {

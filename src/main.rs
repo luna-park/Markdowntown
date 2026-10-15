@@ -11,6 +11,7 @@ mod file_assoc;
 mod fonts;
 mod gpu;
 mod logging;
+mod outline;
 mod preview;
 mod recovery;
 mod scroll_sync;

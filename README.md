@@ -7,6 +7,7 @@ A Markdown editor for Windows with a live preview and Mermaid diagrams.
   syntax-highlighted code, local and remote images
 - Mermaid diagrams rendered right in the preview — no browser or Node.js needed
 - Synchronized scrolling between the editor and the preview
+- Outline panel: jump to any heading in the editor and the preview
 - Export to a single self-contained HTML file (styles, diagrams and local images inside);
   print it from the browser to get a PDF
 - Light and dark themes, adjustable fonts, crash recovery for unsaved changes
@@ -31,6 +32,7 @@ falls back to software rendering.
 |---|---|
 | New / Open / Save / Save As | Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S |
 | Export to HTML | Ctrl+Shift+E |
+| Show or hide the outline (list of headings) | Ctrl+Shift+O |
 | Bold / Italic / Inline code / Link | Ctrl+B / Ctrl+I / Ctrl+E / Ctrl+K |
 | Find / Replace | Ctrl+F / Ctrl+H |
 | Zoom the whole UI | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |

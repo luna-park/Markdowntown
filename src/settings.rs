@@ -47,6 +47,8 @@ pub struct Settings {
     pub sync_scroll: bool,
     pub editor_ratio: f32,
     pub view_mode: ViewMode,
+    /// Панель оглавления (View → Outline).
+    pub show_outline: bool,
     pub theme: Theme,
     /// Недавние файлы, свежие первыми.
     pub recent_files: Vec<PathBuf>,
@@ -61,6 +63,7 @@ impl Default for Settings {
             sync_scroll: true,
             editor_ratio: 0.5,
             view_mode: ViewMode::default(),
+            show_outline: false,
             theme: Theme::default(),
             recent_files: Vec::new(),
         }

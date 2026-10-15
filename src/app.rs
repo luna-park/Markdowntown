@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::document::{DiskChange, Document};
 use crate::editor::Editor;
 use crate::fonts;
+use crate::outline::Outline;
 use crate::preview::Preview;
 use crate::recovery::{Draft, Drafts};
 use crate::scroll_sync::ScrollSync;
@@ -38,6 +39,10 @@ const MIN_PREVIEW_WIDTH: f32 = 280.0;
 const DISK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// Как часто (не чаще) записывать черновик несохранённых правок.
 const DRAFT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Текущий раздел оглавления определяется на такой глубине от верха панели, px —
+/// больше зазора над заголовком после перехода (8 px), чтобы раздел был «своим».
+const SECTION_PROBE: f32 = 16.0;
 
 /// Допустимая ширина панели редактора при ширине окна `window_width`: превью остаётся
 /// не уже `MIN_PREVIEW_WIDTH`. В очень узком окне обе панели делят его поровну.
@@ -96,6 +101,13 @@ pub struct MarkdowntownApp {
     draft_written: Option<((u64, u64), Option<PathBuf>)>,
     last_draft_time: Instant,
     last_disk_check: Instant,
+    outline: Outline,
+    /// Байт документа в верхней строке ведущей панели (прошлый кадр) — текущий раздел.
+    top_byte: usize,
+    /// Переход по оглавлению: превью прокручивается к этому байту после раскладки.
+    outline_jump: Option<usize>,
+    /// Сколько кадров уже длится переход (страховка от бесконечной подстройки).
+    outline_jump_frames: u32,
     /// Идущий экспорт в HTML: итог (сообщение для статуса) придёт из фонового потока.
     export: Option<mpsc::Receiver<String>>,
 }
@@ -142,6 +154,10 @@ impl MarkdowntownApp {
             last_draft_time: Instant::now(),
             last_disk_check: Instant::now(),
             export: None,
+            outline: Outline::default(),
+            top_byte: 0,
+            outline_jump: None,
+            outline_jump_frames: 0,
         };
         if let Some(path) = std::env::args_os().nth(1) {
             app.load(Path::new(&path));
@@ -499,12 +515,15 @@ impl MarkdowntownApp {
         let save = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
         let save_as = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::S);
         let export = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::E);
+        let outline = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::O);
 
         // save_as проверяем первым: Ctrl+Shift+S иначе съест Ctrl+S
         if ctx.input_mut(|i| i.consume_shortcut(&save_as)) {
             self.save(true);
         } else if ctx.input_mut(|i| i.consume_shortcut(&save)) {
             self.save(false);
+        } else if ctx.input_mut(|i| i.consume_shortcut(&outline)) {
+            self.settings.show_outline = !self.settings.show_outline;
         } else if ctx.input_mut(|i| i.consume_shortcut(&open)) {
             self.request(Action::Open(None));
         } else if ctx.input_mut(|i| i.consume_shortcut(&new)) {
@@ -684,6 +703,7 @@ impl MarkdowntownApp {
         ui.radio_value(&mut s.view_mode, ViewMode::Editor, "Editor only");
         ui.radio_value(&mut s.view_mode, ViewMode::Preview, "Preview only");
         ui.separator();
+        ui.checkbox(&mut s.show_outline, "Outline (Ctrl+Shift+O)");
         ui.checkbox(&mut self.scroll_sync.enabled, "Synchronized scrolling");
         ui.separator();
 
@@ -729,17 +749,57 @@ impl MarkdowntownApp {
         });
     }
 
+    /// Панель оглавления слева; клик — переход к заголовку в редакторе и превью.
+    fn outline_panel(&mut self, ui: &mut egui::Ui) {
+        if !self.settings.show_outline {
+            return;
+        }
+        egui::Panel::left("outline")
+            .resizable(true)
+            .default_size(220.0)
+            .size_range(120.0..=480.0)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.strong("Outline");
+                ui.separator();
+                let version = self.doc.version();
+                if let Some(byte) = self
+                    .outline
+                    .show(ui, &self.doc.text, version, self.top_byte)
+                {
+                    if self.settings.view_mode != ViewMode::Preview {
+                        self.editor.jump_to(ui.ctx(), &self.doc.text, byte);
+                    }
+                    self.outline_jump = Some(byte);
+                    // Сразу подсветить выбранный раздел, не дожидаясь прокрутки.
+                    self.top_byte = byte;
+                }
+            });
+    }
+
     fn panels(&mut self, ui: &mut egui::Ui) {
         let (editor_scroll, preview_scroll) = std::mem::take(&mut self.pending_scroll);
         match self.settings.view_mode {
             ViewMode::Editor => {
-                egui::CentralPanel::default()
-                    .show(ui, |ui| self.editor.show(ui, &mut self.doc, None));
+                let editor = egui::CentralPanel::default()
+                    .show(ui, |ui| self.editor.show(ui, &mut self.doc, None))
+                    .inner;
+                self.outline_jump = None;
+                self.top_byte =
+                    editor.byte_at_offset(&self.doc.text, editor.offset + SECTION_PROBE);
                 return;
             }
             ViewMode::Preview => {
-                egui::CentralPanel::default()
-                    .show(ui, |ui| self.preview.show(ui, &mut self.doc, None));
+                let preview = egui::CentralPanel::default()
+                    .show(ui, |ui| {
+                        self.preview.show(ui, &mut self.doc, preview_scroll)
+                    })
+                    .inner;
+                self.jump_preview(&preview);
+                if self.outline_jump.is_none() {
+                    self.top_byte =
+                        preview.byte_for_y(preview.offset + SECTION_PROBE, self.doc.text.len());
+                }
                 return;
             }
             ViewMode::Both => {}
@@ -769,8 +829,36 @@ impl MarkdowntownApp {
             .inner;
 
         self.pending_scroll = self.scroll_sync.update(&self.doc.text, &editor, &preview);
+        // Превью тоже переходит к заголовку — и при выключенной синхронной прокрутке.
+        self.jump_preview(&preview);
         if self.pending_scroll != (None, None) {
             ui.ctx().request_repaint();
+        }
+        if self.outline_jump.is_none() {
+            self.top_byte = editor.byte_at_offset(&self.doc.text, editor.offset + SECTION_PROBE);
+        }
+    }
+
+    /// Прокрутка превью к заголовку из оглавления. Высоты блоков, которые ещё не
+    /// рисовались, известны приблизительно — поэтому повторяем, пока позиция не устоится.
+    fn jump_preview(&mut self, preview: &crate::scroll_sync::PreviewGeometry) {
+        let Some(byte) = self.outline_jump else {
+            return;
+        };
+        let target =
+            (preview.y_for_byte(byte, self.doc.text.len()) - 8.0).clamp(0.0, preview.max_offset);
+        if (target - preview.offset).abs() > 1.0 {
+            self.pending_scroll.1 = Some(target);
+            self.scroll_sync.expect_preview(target);
+            self.outline_jump_frames += 1;
+            if self.outline_jump_frames > 10 {
+                self.outline_jump = None;
+            }
+        } else {
+            self.outline_jump = None;
+        }
+        if self.outline_jump.is_none() {
+            self.outline_jump_frames = 0;
         }
     }
 
@@ -799,6 +887,7 @@ impl eframe::App for MarkdowntownApp {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        self.outline_panel(ui);
         self.panels(ui);
         self.show_dialog(&ctx);
 
