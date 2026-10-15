@@ -66,6 +66,8 @@ New-Item -ItemType Directory -Force "$stage\licenses" | Out-Null
 Copy-Item $exe, README.md, LICENSE-MIT, LICENSE-APACHE $stage
 Copy-Item $licenses $stage
 Copy-Item -Recurse licenses\katex-fonts "$stage\licenses\katex-fonts"
+# Примеры: все элементы Markdown (showcase.md ссылается на images\ и mermaid.md).
+Copy-Item -Recurse examples "$stage\examples"
 
 New-Item -ItemType Directory -Force dist | Out-Null
 $zip = "dist\$name.zip"

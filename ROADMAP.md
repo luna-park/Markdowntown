@@ -162,6 +162,8 @@
 - [x] **1.0** Версия 1.0.0 (`Cargo.toml`, ресурсы exe)
 - [x] Версия 1.1.0: экспорт в HTML, ассоциация с `.md`, вложенные цитаты в превью,
       корень mindmap в тёмной теме; exe 43.6 МБ, zip 17.5 МБ
+- [x] Версия 1.2.0: оглавление, формулы LaTeX; в архиве — папка `examples\` (showcase.md,
+      mermaid.md, картинка); exe 43.7 МБ, zip 17.5 МБ
 - [x] Экспорт в HTML (File → Export HTML…, Ctrl+Shift+E): один самодостаточный файл —
       стили как у GitHub; тема — по View → Theme (System — по `prefers-color-scheme`
       читателя, Light/Dark — фиксированная; печать всегда светлая),

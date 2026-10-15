@@ -21,6 +21,9 @@ A Markdown editor for Windows with a live preview and Mermaid diagrams.
 3. Open a file with **Ctrl+O**, drop a file onto the window, or pass it on the command line:
    `markdowntown.exe notes.md`.
 
+To see everything the app can do, open `examples\showcase.md` (all Markdown elements,
+formulas, a diagram) and `examples\mermaid.md` (all diagram types).
+
 Windows SmartScreen may warn about an unrecognized app the first time you run it,
 because the executable is not code-signed. Click **More info → Run anyway**.
 

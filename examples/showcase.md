@@ -1,7 +1,8 @@
 # Showcase: all supported Markdown elements
 
-This document is used to check the preview manually. Open it with
-`cargo run -- examples/showcase.md`.
+Every element Markdowntown can show, on one page. Open this file in Markdowntown
+(File → Open or drop it on the window) and compare the source with the preview;
+from the source tree: `cargo run -- examples/showcase.md`.
 
 ## Headings
 

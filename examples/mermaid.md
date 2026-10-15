@@ -1,6 +1,7 @@
 # Mermaid diagram types
 
-Every diagram type that is checked manually. Open with `cargo run -- examples/mermaid.md`.
+Every supported diagram type. Open this file in Markdowntown; from the source tree:
+`cargo run -- examples/mermaid.md`.
 
 ## flowchart
 
