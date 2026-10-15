@@ -517,6 +517,10 @@ impl MarkdowntownApp {
                 }
             });
             ui.menu_button("View", |ui| self.view_menu(ui));
+            // Подпись автора справа в строке меню.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak("luna-park discoteque 2026");
+            });
         });
     }
 

@@ -10,7 +10,10 @@ fn main() {
     res.set_icon("assets/icon.ico")
         .set("ProductName", "Markdowntown")
         .set("FileDescription", "Markdowntown — Markdown editor")
-        .set("LegalCopyright", "Licensed under MIT OR Apache-2.0");
+        .set(
+            "LegalCopyright",
+            "© 2026 luna-park discoteque. Licensed under MIT OR Apache-2.0",
+        );
     if let Err(e) = res.compile() {
         // Без ресурсов exe работает, просто со стандартной иконкой.
         println!("cargo:warning=cannot embed Windows resources: {e}");
