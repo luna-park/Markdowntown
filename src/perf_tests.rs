@@ -328,3 +328,118 @@ fn perf_first_tab_frames() {
         }
     }
 }
+
+/// Документ, где много блоков кода: раздел с описанием и блоком Rust в `lines` строк,
+/// повторённый до ~200 КБ.
+fn code_heavy_document(lines: usize) -> String {
+    let code = include_str!("editor/commands.rs")
+        .lines()
+        .cycle()
+        .take(lines)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut text = String::new();
+    let mut i = 0;
+    while text.len() < 200 * 1024 {
+        i += 1;
+        text.push_str(&format!(
+            "## Section {i}\n\nSome text before the code block.\n\n```rust\n// block {i}\n{code}\n```\n\n"
+        ));
+    }
+    text
+}
+
+/// Прокрутка по 120 px за кадр: превью вниз и обратно вверх (блоки, ушедшие за край,
+/// появляются снова), затем редактор + превью вместе (синхронная прокрутка). Время кадра
+/// UI и тесселяции: среднее, 95-й перцентиль, худший; «пики» — кадры дольше 3 средних
+/// (первый кадр прохода — смена раскладки, не прокрутка).
+/// `cargo test --release perf_scroll -- --ignored --nocapture`.
+#[test]
+#[ignore = "замер, запускать вручную"]
+fn perf_scroll() {
+    for (name, text) in [
+        ("showcase x N", big_document()),
+        ("code blocks of 30 lines", code_heavy_document(30)),
+        ("code blocks of 300 lines", code_heavy_document(300)),
+    ] {
+        let ctx = egui::Context::default();
+        crate::style::apply_global(&ctx);
+        crate::fonts::install(&ctx, None);
+        let mut doc = Document::new_untitled(text);
+        let mut preview = TestPreview::new(&ctx);
+        let mut editor = Editor::default();
+        // Кадр: превью (и редактор — при синхронной прокрутке) на заданных долях прокрутки;
+        // время — вместе с тесселяцией (её делает eframe после `run_ui`).
+        let mut frame = |both: bool, preview_offset: f32, editor_offset: f32| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 1000.0),
+                )),
+                ..Default::default()
+            };
+            let (mut preview_max, mut editor_max) = (0.0, 0.0);
+            let t = Instant::now();
+            let mut out = ctx.run_ui(input, |ui| {
+                if both {
+                    egui::Panel::left("editor")
+                        .exact_size(800.0)
+                        .show(ui, |ui| {
+                            editor_max = editor.show(ui, &mut doc, Some(editor_offset)).max_offset;
+                        });
+                }
+                egui::CentralPanel::default().show(ui, |ui| {
+                    preview_max = preview.show(ui, &mut doc, Some(preview_offset)).max_offset;
+                });
+            });
+            let ui_ms = t.elapsed().as_secs_f64() * 1e3;
+            out.textures_delta.clear();
+            let t = Instant::now();
+            let _ = ctx.tessellate(out.shapes, out.pixels_per_point);
+            let tess_ms = t.elapsed().as_secs_f64() * 1e3;
+            (ui_ms, tess_ms, preview_max, editor_max)
+        };
+        let (_, _, preview_max, editor_max) = frame(true, 0.0, 0.0);
+        // Прокрутка вниз и обратно вверх: блоки, ушедшие за край, появляются снова.
+        for (panes, both) in [
+            ("preview, down", false),
+            ("preview, up", false),
+            ("editor + preview, down", true),
+        ] {
+            let mut ui_times = Vec::new();
+            let mut tess_times = Vec::new();
+            let up = panes.ends_with("up");
+            let mut step = 0.0;
+            while step <= preview_max {
+                let offset = if up { preview_max - step } else { step };
+                step += 120.0;
+                let editor_offset = offset / preview_max.max(1.0) * editor_max;
+                let (ui_ms, tess_ms, _, _) = frame(both, offset, editor_offset);
+                ui_times.push(ui_ms);
+                tess_times.push(tess_ms);
+            }
+            // Пики: кадры дольше 3 средних — сколько их и на каких кадрах.
+            let avg = ui_times.iter().sum::<f64>() / ui_times.len() as f64;
+            let spikes: Vec<String> = ui_times
+                .iter()
+                .enumerate()
+                .filter(|(_, ms)| **ms > 3.0 * avg.max(0.5))
+                .map(|(i, ms)| format!("#{i}: {ms:.0}"))
+                .collect();
+            println!("  spikes ({}): {}", spikes.len(), spikes.join(", "));
+            let stats = |times: &mut Vec<f64>| {
+                times.sort_by(f64::total_cmp);
+                let avg = times.iter().sum::<f64>() / times.len() as f64;
+                let p95 = times[times.len() * 95 / 100];
+                let max = times[times.len() - 1];
+                format!("avg {avg:.1}, p95 {p95:.1}, max {max:.1} ms")
+            };
+            println!(
+                "{name}, {panes}: {} frames; ui {}; tessellation {}",
+                ui_times.len(),
+                stats(&mut ui_times),
+                stats(&mut tess_times)
+            );
+        }
+    }
+}
