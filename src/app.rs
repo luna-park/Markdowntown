@@ -242,7 +242,10 @@ impl MarkdowntownApp {
         let Some(drafts) = &self.drafts else {
             return;
         };
-        if !self.doc.is_dirty() {
+        // Выход подтверждён (правки сохранены или отброшены, черновик уже удалён):
+        // не записывать его заново в последнем кадре — иначе при следующем запуске
+        // прошлое закрытие выглядело бы аварийным.
+        if !self.doc.is_dirty() || self.allow_close {
             return;
         }
         let path = self.doc.path().map(Path::to_owned);
