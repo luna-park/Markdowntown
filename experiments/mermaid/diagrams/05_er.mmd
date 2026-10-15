@@ -1,0 +1,12 @@
+erDiagram
+    USER ||--o{ DOCUMENT : владеет
+    DOCUMENT ||--|{ SEGMENT : состоит
+    DOCUMENT {
+        string path PK
+        int size
+        bool dirty
+    }
+    SEGMENT {
+        int line_start
+        string kind
+    }

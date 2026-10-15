@@ -1,0 +1,42 @@
+| engine | diagram | status | time, ms | foreignObject |
+|---|---|---|---|---|
+| merman | 01_flowchart | ok | 3.70 | false |
+| merman | 02_sequence | ok | 1.49 | false |
+| merman | 03_class | ok | 3.58 | false |
+| merman | 04_state | ok | 3.97 | false |
+| merman | 05_er | ok | 2.93 | false |
+| merman | 06_gantt | ok | 0.60 | false |
+| merman | 07_pie | ok | 0.30 | false |
+| merman | 08_flowchart_lr_shapes | ok | 4.99 | false |
+| mmdr | 01_flowchart | ok | 28.32 | false |
+| mmdr | 02_sequence | ok | 0.31 | false |
+| mmdr | 03_class | ERR unexpected token '<<enumeration>>' at 9:9; expected node identifier | - | - |
+| mmdr | 04_state | ok | 1.70 | false |
+| mmdr | 05_er | ok | 1.77 | false |
+| mmdr | 06_gantt | ok | 0.10 | false |
+| mmdr | 07_pie | ok | 0.05 | false |
+| mmdr | 08_flowchart_lr_shapes | ok | 31.26 | false |
+| mermaid-little | 01_flowchart | ok | 10.58 | true |
+| mermaid-little | 02_sequence | ok | 0.05 | false |
+| mermaid-little | 03_class | ok | 0.76 | true |
+| mermaid-little | 04_state | ok | 2.49 | true |
+| mermaid-little | 05_er | ok | 0.61 | true |
+| mermaid-little | 06_gantt | ok | 0.07 | false |
+| mermaid-little | 07_pie | ok | 0.03 | false |
+| mermaid-little | 08_flowchart_lr_shapes | ok | 13.60 | true |
+| mermaid-svg | 01_flowchart | ok | 0.06 | false |
+| mermaid-svg | 02_sequence | ok | 0.04 | false |
+| mermaid-svg | 03_class | ok | 0.04 | false |
+| mermaid-svg | 04_state | ok | 0.06 | false |
+| mermaid-svg | 05_er | ok | 0.04 | false |
+| mermaid-svg | 06_gantt | ok | 0.04 | false |
+| mermaid-svg | 07_pie | ok | 0.01 | false |
+| mermaid-svg | 08_flowchart_lr_shapes | ok | 0.05 | false |
+| mermaid-render | 01_flowchart | ok | 0.73 | false |
+| mermaid-render | 02_sequence | ok | 0.02 | false |
+| mermaid-render | 03_class | ok | 0.25 | false |
+| mermaid-render | 04_state | ok | 1.09 | false |
+| mermaid-render | 05_er | ok | 0.30 | false |
+| mermaid-render | 06_gantt | ok | 0.01 | false |
+| mermaid-render | 07_pie | ok | 0.01 | false |
+| mermaid-render | 08_flowchart_lr_shapes | ok | 0.83 | false |

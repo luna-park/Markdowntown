@@ -1,0 +1,15 @@
+classDiagram
+    class Document {
+        +String text
+        +Option~PathBuf~ path
+        +bool dirty
+        +save() Result
+    }
+    class Segment {
+        <<enumeration>>
+        Markdown
+        Mermaid
+    }
+    Document "1" --> "*" Segment : содержит
+    Renderer <|-- MmdcRenderer
+    Renderer <|-- NativeRenderer

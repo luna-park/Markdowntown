@@ -1,0 +1,13 @@
+sequenceDiagram
+    participant U as Пользователь
+    participant E as Редактор
+    participant R as Renderer
+    U->>E: Ввод текста
+    E->>R: render(source)
+    activate R
+    R-->>E: SVG
+    deactivate R
+    Note over E,R: кэш по хэшу
+    alt ошибка
+        R-->>E: Err
+    end

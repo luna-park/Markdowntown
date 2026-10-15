@@ -1,0 +1,6 @@
+/target
+
+# Эксперименты
+experiments/**/target/
+experiments/**/node_modules/
+experiments/**/out/
