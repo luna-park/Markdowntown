@@ -6,33 +6,32 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
 use crate::document::Document;
+use crate::scroll_sync::PreviewGeometry;
 use crate::segment::{self, Segment, SegmentKind};
+use crate::style;
 use crate::viewer::DiagramViewer;
 
 /// Пауза в наборе, после которой перерисовываются диаграммы.
 const DIAGRAM_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// Размер основного текста превью, pt. Остальные стили (код, мелкий текст)
-/// масштабируются пропорционально, заголовки считаются от него в `egui_commonmark`.
+/// Размер основного текста превью, pt. Заголовки считаются от него в `egui_commonmark`.
 const PREVIEW_BODY_SIZE: f32 = 14.0;
 
-/// Увеличивает шрифты в `ui` превью (не затрагивая редактор и меню).
-fn apply_preview_text_scale(ui: &mut egui::Ui) {
+/// Шрифты и цвета превью: размеры — от `PREVIEW_BODY_SIZE` (код чуть мельче, как на
+/// GitHub), цвета текста — для чтения (см. [`style::apply_reading_colors`]).
+fn apply_preview_style(ui: &mut egui::Ui) {
     let styles = &mut ui.style_mut().text_styles;
-    let Some(body) = styles.get(&egui::TextStyle::Body).map(|f| f.size) else {
-        return;
-    };
-    let factor = PREVIEW_BODY_SIZE / body;
-    for style in [
-        egui::TextStyle::Body,
-        egui::TextStyle::Monospace,
-        egui::TextStyle::Small,
-        egui::TextStyle::Button,
+    for (style, scale) in [
+        (egui::TextStyle::Body, 1.0),
+        (egui::TextStyle::Button, 1.0),
+        (egui::TextStyle::Monospace, 0.9),
+        (egui::TextStyle::Small, 0.85),
     ] {
         if let Some(font) = styles.get_mut(&style) {
-            font.size *= factor;
+            font.size = PREVIEW_BODY_SIZE * scale;
         }
     }
+    style::apply_reading_colors(ui);
 }
 
 #[derive(Default)]
@@ -53,8 +52,15 @@ pub struct Preview {
 }
 
 impl Preview {
-    pub fn show(&mut self, ui: &mut egui::Ui, doc: &mut Document) {
-        apply_preview_text_scale(ui);
+    /// Рисует превью в собственной области прокрутки. `scroll_to` — прокрутка от
+    /// синхронизации с редактором. Возвращает якоря для синхронизации.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        doc: &mut Document,
+        scroll_to: Option<f32>,
+    ) -> PreviewGeometry {
+        apply_preview_style(ui);
         let ctx = ui.ctx().clone();
         let diagrams = self
             .diagrams
@@ -89,38 +95,60 @@ impl Preview {
 
         let image_base = doc.base_dir().map(file_uri_prefix);
         let mut mermaid_index = 0;
+        let mut anchors = Vec::new();
 
-        for (i, seg) in self.segments.iter().enumerate() {
-            let edited = ui
-                .push_id(i, |ui| match &seg.kind {
-                    SegmentKind::Markdown => {
-                        show_markdown(ui, &mut self.md_cache, image_base.as_deref(), doc, seg)
-                    }
-                    SegmentKind::Mermaid { source } => {
-                        if self.shown.len() <= mermaid_index {
-                            self.shown.resize(mermaid_index + 1, None);
-                        }
-                        let clicked = show_mermaid(
-                            ui,
-                            diagrams,
-                            &mut self.shown[mermaid_index],
-                            source,
-                            &diagram_params,
-                        );
-                        if clicked {
-                            self.viewer = Some(DiagramViewer::new(source));
-                        }
-                        mermaid_index += 1;
-                        false
-                    }
-                })
-                .inner;
-            if edited {
-                // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
-                ctx.request_repaint();
-                break;
-            }
+        let mut scroll = egui::ScrollArea::vertical()
+            .id_salt("preview_scroll")
+            .auto_shrink(false);
+        if let Some(offset) = scroll_to {
+            scroll = scroll.vertical_scroll_offset(offset);
         }
+        let output =
+            scroll.show(ui, |ui| {
+                let content_top = ui.min_rect().top();
+                for (i, seg) in self.segments.iter().enumerate() {
+                    let edited = ui
+                        .push_id(i, |ui| match &seg.kind {
+                            SegmentKind::Markdown => {
+                                let edited = show_markdown(
+                                    ui,
+                                    &mut self.md_cache,
+                                    image_base.as_deref(),
+                                    doc,
+                                    seg,
+                                );
+                                anchors.extend(self.md_cache.block_positions().iter().map(
+                                    |&(offset, y)| (seg.range.start + offset, y - content_top),
+                                ));
+                                edited
+                            }
+                            SegmentKind::Mermaid { source } => {
+                                anchors.push((seg.range.start, ui.cursor().top() - content_top));
+                                if self.shown.len() <= mermaid_index {
+                                    self.shown.resize(mermaid_index + 1, None);
+                                }
+                                let clicked = show_mermaid(
+                                    ui,
+                                    diagrams,
+                                    &mut self.shown[mermaid_index],
+                                    source,
+                                    &diagram_params,
+                                );
+                                if clicked {
+                                    self.viewer = Some(DiagramViewer::new(source));
+                                }
+                                mermaid_index += 1;
+                                false
+                            }
+                        })
+                        .inner;
+                    if edited {
+                        // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
+                        ctx.request_repaint();
+                        break;
+                    }
+                }
+            });
 
         if let Some(viewer) = &mut self.viewer
             && !viewer.show(&ctx, diagrams, diagram_params.theme)
@@ -129,6 +157,14 @@ impl Preview {
         }
         // После всех запросов кадра: отменить задания, которые больше не нужны.
         diagrams.end_frame();
+
+        let viewport = output.inner_rect.height();
+        PreviewGeometry {
+            anchors,
+            offset: output.state.offset.y,
+            max_offset: (output.content_size.y - viewport).max(0.0),
+            content_height: output.content_size.y,
+        }
     }
 }
 

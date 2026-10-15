@@ -421,6 +421,10 @@ pub struct CommonMarkCache {
 
     scroll: HashMap<egui::Id, ScrollableCache>,
     pub(self) has_installed_loaders: bool,
+
+    /// Markdowntown patch: позиции блоков верхнего уровня последнего `show`:
+    /// (байтовое смещение в исходнике, Y экрана перед блоком). Для синхронной прокрутки.
+    block_positions: Vec<(usize, f32)>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -435,11 +439,28 @@ impl Default for CommonMarkCache {
             scroll: Default::default(),
             scroll_to_id_target: None,
             has_installed_loaders: false,
+            block_positions: Vec::new(),
         }
     }
 }
 
 impl CommonMarkCache {
+    /// Markdowntown patch: позиции блоков верхнего уровня, записанные последним `show`
+    /// (байтовое смещение в исходнике, Y экрана перед блоком), в порядке исходника.
+    pub fn block_positions(&self) -> &[(usize, f32)] {
+        &self.block_positions
+    }
+
+    #[doc(hidden)]
+    pub fn clear_block_positions(&mut self) {
+        self.block_positions.clear();
+    }
+
+    #[doc(hidden)]
+    pub fn push_block_position(&mut self, offset: usize, y: f32) {
+        self.block_positions.push((offset, y));
+    }
+
     #[cfg(feature = "better_syntax_highlighting")]
     pub fn add_syntax_from_folder(&mut self, path: &str) {
         let mut builder = self.ps.clone().into_builder();

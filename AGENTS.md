@@ -32,7 +32,10 @@ cargo fmt             # форматирование
 - `src/preview.rs` — `Preview`: кэш сегментов по `Document::version()`, рендер Markdown через
   `egui_commonmark` (`show_mut` — чекбоксы task-list пишут в исходник), mermaid-блоки через
   `DiagramService` с debounce и показом предыдущей версии. Размер текста превью —
-  `PREVIEW_BODY_SIZE` (14 pt); код и мелкий текст масштабируются пропорционально.
+  `PREVIEW_BODY_SIZE` (14 pt), код — 0.9 от него; цвета текста — как у GitHub.
+- `src/style.rs` — общий вид: размеры шрифтов интерфейса (`apply_global`, 14 pt вместо 12.5),
+  цвет текста для чтения (`reading_text_color`, `apply_reading_colors`), шрифт редактора
+  по умолчанию и допустимый диапазон.
 - `src/diagram/` — рендер Mermaid:
   - `mod.rs` — трейт `DiagramRenderer`, `DiagramTheme`;
   - `merman_backend.rs` — реализация на `merman` (по `Renderer` на тему; своя палитра для
@@ -41,6 +44,15 @@ cargo fmt             # форматирование
   - `service.rs` — `DiagramService`: фоновый поток, кэш текстур по `DiagramKey`. Протокол кадра:
     `begin_frame` → `get`/`peek` для всех нужных диаграмм → `end_frame` (отменяет задания,
     не запрошенные через `get` в этом кадре).
+- `src/editor/` — редактор:
+  - `mod.rs` — `Editor`: `TextEdit` с подсветкой и номерами строк, панель поиска/замены,
+    горячие клавиши (обрабатываются до `TextEdit`), программные правки через `apply_edit`
+    (отдельный шаг undo); отдаёт `EditorGeometry` для синхронной прокрутки;
+  - `highlight.rs` — Markdown → `LayoutJob` (флаги на байт по событиям `pulldown-cmark`);
+  - `commands.rs` — чистые функции правок: обёртка маркерами, ссылка, продолжение списков;
+  - `search.rs` — поиск (в т.ч. без учёта регистра для кириллицы) и замена.
+- `src/scroll_sync.rs` — `ScrollSync`: ведущая/ведомая панель, сопоставление через байт
+  документа в верхней строке; `PreviewGeometry` — якоря превью.
 - `src/viewer.rs` — `DiagramViewer`: окно просмотра диаграммы крупно (масштаб вокруг точки,
   прокрутка, перетаскивание, растр повышенной плотности при увеличении).
 - `examples/showcase.md` — все поддерживаемые элементы Markdown, `examples/mermaid.md` —
@@ -63,10 +75,12 @@ cargo fmt             # форматирование
 `egui_commonmark` подключён с features `better_syntax_highlighting`, `svg`, `fetch`
 (картинки по URL; HTTP через `ureq` + rustls, без OpenSSL).
 
-`egui_commonmark_backend` подменён пропатченной копией из `vendor/` через `[patch.crates-io]`
-(размеры заголовков H1–H6 как на GitHub). Подробности и порядок обновления —
+`egui_commonmark` и `egui_commonmark_backend` подменены пропатченными копиями из `vendor/`
+через `[patch.crates-io]`: размеры заголовков H1–H6 как на GitHub; позиции блоков верхнего
+уровня для синхронной прокрутки (`CommonMarkCache::block_positions`). Подробности и порядок обновления —
 [vendor/README.md](vendor/README.md). При обновлении `egui_commonmark` проверять, что патч
-применился: `cargo tree -i egui_commonmark_backend` должен показывать путь `vendor/...`.
+применился: `cargo tree -i egui_commonmark` и `cargo tree -i egui_commonmark_backend`
+должны показывать пути `vendor/...`.
 
 В `[profile.dev.package."*"]` у зависимостей отключена отладочная информация —
 иначе debug-сборка занимает несколько ГБ.
@@ -144,6 +158,9 @@ cargo fmt             # форматирование
 
 ## Соглашения
 
+- Во встроенных шрифтах egui нет многих символов (↑ ↓ ▲ ✓ → …) — они рисуются
+  квадратиками. Все не-ASCII символы интерфейса перечислены в тесте `UI_SYMBOLS`
+  (`src/app.rs`); новый символ — сначала добавить туда и прогнать тесты.
 - Тексты UI и сообщения пользователю — на английском, строки прямо в коде
   (локализация — в «Позже»). Документация и комментарии — на русском.
 - Ошибки ввода-вывода не паниковать, а показывать в строке статуса.

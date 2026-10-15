@@ -19,6 +19,7 @@ serde_json = "1.0.154"
 [profile.dev.package."*"]
 debug = false
 
-# Пропатченная копия бэкенда egui_commonmark (размеры заголовков) — см. vendor/README.md.
+# Пропатченные копии egui_commonmark (заголовки, позиции блоков) — см. vendor/README.md.
 [patch.crates-io]
 egui_commonmark_backend = { path = "vendor/egui_commonmark_backend" }
+egui_commonmark = { path = "vendor/egui_commonmark" }

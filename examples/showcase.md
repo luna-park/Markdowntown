@@ -149,7 +149,8 @@ sequenceDiagram
 Mermaid inside a list stays a regular code block:
 
 - Item
-  ```mermaid
+
+```mermaid
   pie
       "A" : 1
   ```
