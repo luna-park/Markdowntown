@@ -1,13 +1,14 @@
 # Release-сборка и portable-архив: dist\Markdowntown-<версия>-windows-x64.zip
 #
-#   .\package.ps1            # проверки (check.ps1), сборка, архив
+#   .\package.ps1            # проверки (check.ps1), аудит, сборка, архив
 #   .\package.ps1 -SkipCheck # без check.ps1
+#   .\package.ps1 -SkipAudit # без cargo audit (например, без сети)
 #
 # Архив: markdowntown.exe, README.md, лицензии проекта, THIRD_PARTY_LICENSES.html
 # (cargo-about), лицензия шрифтов KaTeX. Перед упаковкой exe проверяется на зависимость
 # только от системных DLL Windows (portable: ничего не нужно устанавливать).
 
-param([switch] $SkipCheck)
+param([switch] $SkipCheck, [switch] $SkipAudit)
 
 # Не "Stop": cargo пишет прогресс в stderr, и PowerShell 5.1 счёл бы это ошибкой.
 $ErrorActionPreference = "Continue"
@@ -21,6 +22,16 @@ function Fail([string] $message) {
 if (-not $SkipCheck) {
     & .\check.ps1
     if ($LASTEXITCODE -ne 0) { Fail "check.ps1" }
+}
+
+# --- Уязвимости в зависимостях (база RustSec, нужна сеть) -----------------------
+# Ошибка — только известная уязвимость; «unmaintained» и т.п. — предупреждения в выводе.
+if (-not $SkipAudit) {
+    Write-Host "==> cargo audit" -ForegroundColor Cyan
+    cargo audit
+    if ($LASTEXITCODE -ne 0) {
+        Fail "cargo audit (install: cargo install cargo-audit --locked; offline: -SkipAudit)"
+    }
 }
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
