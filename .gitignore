@@ -7,3 +7,5 @@ experiments/**/out/
 
 # Релизные архивы (package.ps1)
 /dist/
+
+prompts.txt
