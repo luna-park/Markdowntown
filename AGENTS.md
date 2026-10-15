@@ -21,6 +21,9 @@ cargo fmt             # форматирование
 .\package.ps1         # check.ps1 + release + проверка DLL + лицензии → dist\*.zip
 ```
 
+Визуальная проверка: `tools\screenshot.ps1` снимает окно приложения (и может отправить
+клики/ввод — только если окно на переднем плане).
+
 `package.ps1` требует `cargo-about` (`cargo install cargo-about --locked --features cli`).
 Иконка: исходник `assets/icon.svg`, файлы `icon.ico` / `icon-256.png` генерируются
 `cargo test generate_icon_files -- --ignored` и коммитятся.

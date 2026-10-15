@@ -1,5 +1,5 @@
 # Скриншот окна Markdowntown для визуальной проверки (и, при необходимости, ввод).
-#   .	oolsscreenshot.ps1 -Exe targetdebugmarkdowntown.exe -FileArg examplesshowcase.md -Out shot.png
+#   .\tools\screenshot.ps1 -Exe target\debug\markdowntown.exe -FileArg examples\showcase.md -Out shot.png
 # Ввод (-ClickX/-Clicks/-Wheel/-TypeText) отправляется только если окно на переднем плане.
 
 param(
