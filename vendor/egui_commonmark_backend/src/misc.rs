@@ -143,14 +143,9 @@ impl Style {
                 .map_or(14.0, |d| d.size);
             let scale = SCALE[usize::from(level).min(SCALE.len() - 1)];
             text = text.strong().size(body * scale);
-            // Markdowntown patch: заголовки — жирным шрифтом, если приложение установило
-            // семейство `heading` (у egui нет жирного начертания; `strong()` — только цвет).
-            let heading = egui::FontFamily::Name("heading".into());
-            if ui
-                .ctx()
-                .fonts(|f| f.definitions().families.contains_key(&heading))
-            {
-                text = text.family(heading);
+            // Markdowntown patch: заголовки — жирным шрифтом (см. `bold_family`).
+            if let Some(bold) = bold_family(ui) {
+                text = text.family(bold);
             }
             // H6 на GitHub — приглушённым цветом.
             if level >= 5 {
@@ -164,6 +159,13 @@ impl Style {
 
         if self.strong {
             text = text.strong();
+            // Markdowntown patch: **жирный** — жирным шрифтом; код внутри жирного остаётся
+            // моноширинным.
+            if !self.code
+                && let Some(bold) = bold_family(ui)
+            {
+                text = text.family(bold);
+            }
         }
 
         if self.emphasis {
@@ -181,6 +183,16 @@ impl Style {
 
         text
     }
+}
+
+/// Markdowntown patch: жирное начертание — семейство шрифта `heading`, если приложение
+/// его установило. У egui нет жирного начертания (`strong()` меняет только цвет), а
+/// запросить неустановленное семейство нельзя — egui упадёт.
+pub fn bold_family(ui: &Ui) -> Option<egui::FontFamily> {
+    let family = egui::FontFamily::Name("heading".into());
+    ui.ctx()
+        .fonts(|f| f.definitions().families.contains_key(&family))
+        .then_some(family)
 }
 
 #[derive(Default)]
@@ -215,6 +227,14 @@ impl Link {
                 egui::FontSelection::Default,
                 egui::Align::LEFT,
             );
+        }
+        // Markdowntown patch: текст ссылки — всегда цветом ссылок. Готовый `LayoutJob`
+        // хранит цвета своих секций, и у ссылки внутри **жирного** или в заголовке
+        // оставался цвет жирного текста/заголовка вместо цвета ссылки. Начертание
+        // (размер, шрифт заголовка, курсив) сохраняется.
+        let link_color = ui.visuals().hyperlink_color;
+        for section in &mut layout_job.sections {
+            section.format.color = link_color;
         }
         if cache.link_hooks().contains_key(&destination) {
             let ui_link = ui.link(layout_job);

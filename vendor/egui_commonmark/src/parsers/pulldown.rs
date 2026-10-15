@@ -81,6 +81,8 @@ pub struct CommonMarkViewerInternal {
     is_list_item: bool,
     def_list: DefinitionList,
     is_table: bool,
+    /// Markdowntown patch: выравнивание столбцов текущей таблицы (`:---:`, `---:`).
+    table_alignments: Vec<pulldown_cmark::Alignment>,
     is_blockquote: bool,
     checkbox_events: Vec<CheckboxClickEvent>,
     deferred_scroll_to_heading: Option<String>,
@@ -105,6 +107,7 @@ impl CommonMarkViewerInternal {
             code_block: None,
             html_block: String::new(),
             is_table: false,
+            table_alignments: Vec::new(),
             is_blockquote: false,
             checkbox_events: Vec::new(),
             deferred_scroll_to_heading: None,
@@ -497,7 +500,8 @@ impl CommonMarkViewerInternal {
             let frame = egui::Frame::group(ui.style());
             let frame_width = frame.total_margin().sum().x;
             let available = (ui.available_width().min(max_width) - frame_width).max(0.0);
-            let pad = egui::vec2(6.0, 3.0);
+            // Отступы в ячейке: по вертикали — как у GitHub (6 px), чтобы строки не сливались.
+            let pad = egui::vec2(6.0, 6.0);
 
             let columns = std::iter::once(&header)
                 .chain(rows.iter())
@@ -506,13 +510,21 @@ impl CommonMarkViewerInternal {
                 .unwrap_or(0);
             let mut min = vec![0.0f32; columns];
             let mut max = vec![0.0f32; columns];
-            for row in std::iter::once(&header).chain(rows.iter()) {
+            // Естественная ширина каждой ячейки (строки — как в таблице, заголовок первым) —
+            // для выравнивания однострочных ячеек.
+            let mut naturals: Vec<Vec<f32>> = Vec::new();
+            for (r, row) in std::iter::once(&header).chain(rows.iter()).enumerate() {
+                let row_is_header = r == 0;
+                let mut row_naturals = Vec::with_capacity(row.len());
                 for (c, cell) in row.iter().enumerate() {
-                    let (cell_min, cell_max) = measure_cell(ui, cell);
+                    let (cell_min, cell_max) = measure_cell(ui, cell, row_is_header);
                     min[c] = min[c].max(cell_min + 2.0 * pad.x);
                     max[c] = max[c].max(cell_max + 2.0 * pad.x);
+                    row_naturals.push(cell_max);
                 }
+                naturals.push(row_naturals);
             }
+            let alignments = std::mem::take(&mut self.table_alignments);
             let widths = column_widths(&min, &max, available);
             let total: f32 = widths.iter().sum();
 
@@ -539,12 +551,22 @@ impl CommonMarkViewerInternal {
                             let mut x = left;
                             for (c, cell) in row.into_iter().enumerate() {
                                 let width = widths.get(c).copied().unwrap_or(0.0);
+                                let natural = naturals
+                                    .get(r)
+                                    .and_then(|row| row.get(c))
+                                    .copied()
+                                    .unwrap_or(0.0);
+                                let shift = cell_shift(
+                                    alignments.get(c).copied(),
+                                    width - 2.0 * pad.x,
+                                    natural,
+                                );
                                 let rect = egui::Rect::from_min_size(
-                                    egui::pos2(x + pad.x, row_top + pad.y),
+                                    egui::pos2(x + pad.x + shift, row_top + pad.y),
                                     // Как `horizontal_wrapped`: область высотой в одну строку,
                                     // строки переноса наращиваются вниз (бесконечная высота
                                     // дала бы NaN, слишком большая — одну огромную строку).
-                                    egui::vec2((width - 2.0 * pad.x).max(1.0), row_height),
+                                    egui::vec2((width - 2.0 * pad.x - shift).max(1.0), row_height),
                                 );
                                 let mut cell_ui = ui.new_child(
                                     egui::UiBuilder::new()
@@ -802,8 +824,9 @@ impl CommonMarkViewerInternal {
                 self.line.should_end_newline = false;
                 footnote(ui, &note);
             }
-            pulldown_cmark::Tag::Table(_) => {
+            pulldown_cmark::Tag::Table(alignments) => {
                 self.is_table = true;
+                self.table_alignments = alignments;
             }
             pulldown_cmark::Tag::TableHead => {}
             pulldown_cmark::Tag::TableRow => {}
@@ -980,10 +1003,18 @@ fn delayed_events_blockquote<'e>(
 }
 
 /// Markdowntown patch: минимальная (самое длинное слово) и естественная (в одну строку)
-/// ширина содержимого ячейки таблицы. Приблизительно: по тексту и коду ячейки.
-fn measure_cell(ui: &Ui, cell: &[(pulldown_cmark::Event<'_>, Range<usize>)]) -> (f32, f32) {
+/// ширина содержимого ячейки таблицы. Приблизительно: по тексту и коду ячейки; жирный
+/// текст (заголовок таблицы, `**…**`) — жирным шрифтом, он шире.
+fn measure_cell(
+    ui: &Ui,
+    cell: &[(pulldown_cmark::Event<'_>, Range<usize>)],
+    header: bool,
+) -> (f32, f32) {
     let body = TextStyle::Body.resolve(ui.style());
     let mono = TextStyle::Monospace.resolve(ui.style());
+    let bold = egui_commonmark_backend::misc::bold_family(ui)
+        .map_or_else(|| body.clone(), |family| egui::FontId::new(body.size, family));
+    let mut strong = 0usize;
     let width = |text: &str, font: &egui::FontId| {
         ui.fonts_mut(|f| {
             f.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
@@ -994,6 +1025,15 @@ fn measure_cell(ui: &Ui, cell: &[(pulldown_cmark::Event<'_>, Range<usize>)]) -> 
     let (mut min, mut natural) = (0.0f32, 0.0f32);
     for (event, _) in cell {
         let (text, font) = match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong) => {
+                strong += 1;
+                continue;
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Strong) => {
+                strong = strong.saturating_sub(1);
+                continue;
+            }
+            pulldown_cmark::Event::Text(t) if header || strong > 0 => (t.as_ref(), &bold),
             pulldown_cmark::Event::Text(t) => (t.as_ref(), &body),
             pulldown_cmark::Event::Code(t) | pulldown_cmark::Event::InlineMath(t) => {
                 (t.as_ref(), &mono)
@@ -1006,6 +1046,23 @@ fn measure_cell(ui: &Ui, cell: &[(pulldown_cmark::Event<'_>, Range<usize>)]) -> 
         }
     }
     (min, natural.max(min))
+}
+
+/// Markdowntown patch: запас к замеренной ширине ячейки, px — замер приблизительный
+/// (по тексту, а не по виджетам), и без запаса выровненная вправо ячейка могла бы
+/// перенестись на вторую строку.
+const ALIGN_SLACK: f32 = 4.0;
+
+/// Markdowntown patch: сдвиг содержимого ячейки внутри столбца по выравниванию
+/// (`:---:` — по центру, `---:` — вправо). Только для ячеек, которые помещаются в одну
+/// строку: строки переноса в egui всегда идут от левого края.
+pub fn cell_shift(alignment: Option<pulldown_cmark::Alignment>, inner: f32, natural: f32) -> f32 {
+    let free = (inner - natural - ALIGN_SLACK).max(0.0);
+    match alignment {
+        Some(pulldown_cmark::Alignment::Center) => free / 2.0,
+        Some(pulldown_cmark::Alignment::Right) => free,
+        _ => 0.0,
+    }
 }
 
 /// Markdowntown patch: ширины столбцов таблицы для доступной ширины `available` —

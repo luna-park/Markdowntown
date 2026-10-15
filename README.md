@@ -42,7 +42,7 @@ falls back to software rendering.
 | Show or hide the outline (list of headings) | Ctrl+Shift+O |
 | Bold / Italic / Inline code / Link | Ctrl+B / Ctrl+I / Ctrl+E / Ctrl+K |
 | Find / Replace | Ctrl+F / Ctrl+H |
-| Zoom the whole UI | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
+| Zoom the whole UI | Ctrl+Plus / Ctrl+Minus or Ctrl+mouse wheel; Ctrl+0 resets |
 | Continue a list or quote | Enter at the end of an item (Enter on an empty item ends the list) |
 
 Click a diagram in the preview to open it in a zoomable window. Links to other Markdown

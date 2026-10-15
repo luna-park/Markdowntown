@@ -18,7 +18,7 @@ A simple **Markdown** editor with a live _preview_.
 - Each file opens in its own tab: close with **Ctrl+W**, switch with **Ctrl+Tab**
 - Format with **Ctrl+B**, *Ctrl+I*, `Ctrl+E`, links with Ctrl+K
 - Find with Ctrl+F, replace with Ctrl+H
-- Zoom the whole UI with Ctrl+Plus / Ctrl+Minus
+- Zoom the whole UI with Ctrl+Plus / Ctrl+Minus or Ctrl+mouse wheel
 - [x] GitHub-flavored Markdown
 - [x] Mermaid diagrams
 
@@ -45,6 +45,67 @@ fn editor_width_range(window_width: f32) -> egui::Rangef {
     } else {
         egui::Rangef::point((window_width / 2.0).max(0.0))
     }
+}
+
+/// Пределы масштаба интерфейса — как у Ctrl+Plus / Ctrl+Minus в egui (`gui_zoom`).
+const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+/// Шаг масштаба на щелчок колеса — как у Ctrl+Plus / Ctrl+Minus.
+const ZOOM_STEP: f32 = 0.1;
+/// Чувствительность точной прокрутки (тачпад, дельта в точках) — как `scroll_zoom_speed` egui.
+const ZOOM_PER_POINT: f32 = 1.0 / 200.0;
+
+/// Ctrl+колесо (и жест «щипок») над основными панелями — масштаб всего интерфейса,
+/// как Ctrl+Plus / Ctrl+Minus. Над окнами (просмотр диаграммы, диалоги, меню) — нет:
+/// там колесо с Ctrl обрабатывает само окно (диаграмма масштабируется вокруг курсора).
+fn handle_wheel_zoom(ctx: &egui::Context) {
+    // Масштаб — до `input`: вызов `ctx` внутри замыкания `input` — повторная блокировка
+    // контекста (взаимоблокировка).
+    let current = ctx.zoom_factor();
+    let (zoom, pointer) =
+        ctx.input(|i| (wheel_zoom(current, &i.raw.events), i.pointer.hover_pos()));
+    let Some(zoom) = zoom else {
+        return;
+    };
+    let over_window = pointer
+        .and_then(|p| ctx.layer_id_at(p))
+        .is_some_and(|layer| layer.order != egui::Order::Background);
+    if !over_window {
+        ctx.set_zoom_factor(zoom);
+    }
+}
+
+/// Новый масштаб по событиям кадра или `None`, если масштаб не меняли.
+///
+/// По сырым событиям, а не по `zoom_delta`: egui сглаживает колесо и раздаёт щелчок по
+/// нескольким кадрам — масштаб менялся бы ступеньками с перераскладкой на каждой.
+/// Щелчок колеса (дельта в строках) — ровно шаг `ZOOM_STEP` с округлением, как у
+/// Ctrl+Plus; точная прокрутка тачпада (в точках) и «щипок» — плавно.
+fn wheel_zoom(zoom: f32, events: &[egui::Event]) -> Option<f32> {
+    let mut steps = 0.0;
+    let mut factor = 1.0;
+    for event in events {
+        match event {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } if modifiers.ctrl || modifiers.command => match unit {
+                egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => steps += delta.y,
+                egui::MouseWheelUnit::Point => factor *= (delta.y * ZOOM_PER_POINT).exp(),
+            },
+            egui::Event::Zoom(f) => factor *= f,
+            _ => {}
+        }
+    }
+    if steps == 0.0 && factor == 1.0 {
+        return None;
+    }
+    let mut zoom = zoom * factor;
+    if steps != 0.0 {
+        zoom = ((zoom + steps * ZOOM_STEP) / ZOOM_STEP).round() * ZOOM_STEP;
+    }
+    Some(zoom.clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end()))
 }
 
 /// Действие с вкладками; закрытие при несохранённых правках сначала спрашивает.
@@ -920,7 +981,7 @@ impl MarkdowntownApp {
                     .suffix(" pt"),
             );
         });
-        ui.weak("Whole UI: Ctrl+Plus / Ctrl+Minus / Ctrl+0");
+        ui.weak("Whole UI: Ctrl+Plus / Ctrl+Minus / Ctrl+wheel, reset: Ctrl+0");
     }
 
     /// Id вкладок, кроме вкладки `index` (Close Others).
@@ -1189,6 +1250,7 @@ impl eframe::App for MarkdowntownApp {
         self.outline_panel(ui);
         self.panels(ui);
         self.handle_links(&ctx);
+        handle_wheel_zoom(&ctx);
         self.show_dialog(&ctx);
 
         self.check_disk(&ctx);
@@ -1208,6 +1270,43 @@ impl eframe::App for MarkdowntownApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wheel(unit: egui::MouseWheelUnit, y: f32, ctrl: bool) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: if ctrl {
+                egui::Modifiers::CTRL
+            } else {
+                egui::Modifiers::NONE
+            },
+        }
+    }
+
+    #[test]
+    fn wheel_zoom_steps_like_keyboard() {
+        use egui::MouseWheelUnit::{Line, Point};
+        let approx = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-4);
+        // Щелчок колеса — ровно шаг 0.1, с округлением до шага.
+        assert!(approx(wheel_zoom(1.0, &[wheel(Line, 1.0, true)]), 1.1));
+        assert!(approx(wheel_zoom(1.0, &[wheel(Line, -1.0, true)]), 0.9));
+        assert!(approx(wheel_zoom(1.23, &[wheel(Line, 1.0, true)]), 1.3));
+        assert!(approx(
+            wheel_zoom(1.0, &[wheel(Line, 1.0, true), wheel(Line, 1.0, true)]),
+            1.2
+        ));
+        // Без Ctrl — обычная прокрутка, масштаб не трогаем.
+        assert_eq!(wheel_zoom(1.0, &[wheel(Line, 1.0, false)]), None);
+        assert_eq!(wheel_zoom(1.0, &[]), None);
+        // Тачпад — плавно; «щипок» — множитель.
+        let touchpad = wheel_zoom(1.0, &[wheel(Point, 10.0, true)]).unwrap();
+        assert!(touchpad > 1.0 && touchpad < 1.1);
+        assert!(approx(wheel_zoom(1.0, &[egui::Event::Zoom(1.5)]), 1.5));
+        // Пределы.
+        assert!(approx(wheel_zoom(5.0, &[wheel(Line, 3.0, true)]), 5.0));
+        assert!(approx(wheel_zoom(0.2, &[wheel(Line, -3.0, true)]), 0.2));
+    }
 
     #[test]
     fn preview_keeps_minimum_width() {

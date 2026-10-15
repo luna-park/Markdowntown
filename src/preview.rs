@@ -408,6 +408,20 @@ fn file_uri_prefix(dir: &std::path::Path) -> String {
 mod tests {
     use super::*;
 
+    /// Выравнивание однострочных ячеек таблицы (патч `egui_commonmark`).
+    #[test]
+    fn table_cell_shift() {
+        use egui_commonmark::cell_shift;
+        use pulldown_cmark::Alignment;
+        // Столбец 100, текст 40, запас 4: свободно 56.
+        assert_eq!(cell_shift(Some(Alignment::Right), 100.0, 40.0), 56.0);
+        assert_eq!(cell_shift(Some(Alignment::Center), 100.0, 40.0), 28.0);
+        assert_eq!(cell_shift(Some(Alignment::Left), 100.0, 40.0), 0.0);
+        assert_eq!(cell_shift(None, 100.0, 40.0), 0.0);
+        // Не помещается в строку — без сдвига (переносится от левого края).
+        assert_eq!(cell_shift(Some(Alignment::Right), 100.0, 150.0), 0.0);
+    }
+
     /// Ширины столбцов таблицы (патч `egui_commonmark`, см. vendor/README.md).
     #[test]
     fn table_column_widths() {
