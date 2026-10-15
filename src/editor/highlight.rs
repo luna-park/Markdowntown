@@ -317,3 +317,29 @@ mod tests {
         assert_eq!(bg(5), p.current_match_bg);
     }
 }
+
+#[cfg(test)]
+mod perf {
+    use super::*;
+
+    #[test]
+    #[ignore = "замер, запускать вручную"]
+    fn perf_highlight_200k() {
+        let chunk = include_str!("../../examples/showcase.md");
+        let mut text = String::new();
+        while text.len() < 200 * 1024 {
+            text.push_str(chunk);
+        }
+        let p = Palette::from_visuals(&egui::Visuals::dark());
+        let font = FontId::monospace(14.0);
+        let t = std::time::Instant::now();
+        let n = 10;
+        for _ in 0..n {
+            std::hint::black_box(layout_job(&text, &font, &p, &[], None));
+        }
+        println!(
+            "highlight 200 KB: {:.1} ms",
+            t.elapsed().as_secs_f64() * 1e3 / n as f64
+        );
+    }
+}

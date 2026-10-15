@@ -6,6 +6,7 @@ mod diagram;
 mod document;
 mod editor;
 mod fonts;
+mod logging;
 mod preview;
 mod recovery;
 mod scroll_sync;
@@ -19,6 +20,7 @@ mod perf_tests;
 
 fn main() -> eframe::Result {
     let data_dir = data_dir::resolve();
+    let log_file = logging::init(data_dir.as_deref());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Markdowntown")
@@ -31,9 +33,22 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let result = eframe::run_native(
         "Markdowntown",
         options,
         Box::new(move |cc| Ok(Box::new(app::MarkdowntownApp::new(cc, data_dir)))),
-    )
+    );
+    if let Err(e) = &result {
+        // У release-сборки нет консоли: без окна с сообщением запуск просто «не происходит».
+        log::error!("cannot start: {e}");
+        let details = log_file.map_or_else(String::new, |p| {
+            format!("\n\nDetails are in the log file:\n{}", p.display())
+        });
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Markdowntown")
+            .set_description(format!("Markdowntown could not start.\n\n{e}{details}"))
+            .show();
+    }
+    result
 }

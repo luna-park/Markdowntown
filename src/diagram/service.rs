@@ -144,7 +144,10 @@ impl DiagramService {
                     ),
                     size: r.size,
                 },
-                Outcome::Done(Err(e)) => Entry::Failed(e),
+                Outcome::Done(Err(e)) => {
+                    log::debug!("mermaid render failed: {e}");
+                    Entry::Failed(e)
+                }
             };
             self.cache.insert(done.key, (entry, now));
         }

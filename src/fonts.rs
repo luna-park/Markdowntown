@@ -53,8 +53,14 @@ pub fn available_editor_fonts() -> Vec<&'static str> {
 }
 
 fn load(name: &str, file: &str) -> Option<(String, Arc<FontData>)> {
-    let bytes = std::fs::read(fonts_dir()?.join(file)).ok()?;
-    Some((name.to_owned(), Arc::new(FontData::from_owned(bytes))))
+    let path = fonts_dir()?.join(file);
+    match std::fs::read(&path) {
+        Ok(bytes) => Some((name.to_owned(), Arc::new(FontData::from_owned(bytes)))),
+        Err(e) => {
+            log::info!("font {name} not available ({}): {e}", path.display());
+            None
+        }
+    }
 }
 
 /// Устанавливает шрифты в контекст. `editor_font` — название из

@@ -138,7 +138,7 @@ impl MarkdowntownApp {
             app.load(Path::new(&path));
         }
         if data_dir.is_none() {
-            app.status = "No writable data folder: settings and recovery are disabled".into();
+            app.set_status("No writable data folder: settings and recovery are disabled".into());
         }
         app
     }
@@ -159,7 +159,7 @@ impl MarkdowntownApp {
             Action::New => {
                 self.discard_draft();
                 self.doc = Document::new_untitled("");
-                self.status = "New document".into();
+                self.set_status("New document".into());
             }
             Action::Open(None) => {
                 if let Some(path) = rfd::FileDialog::new()
@@ -185,12 +185,12 @@ impl MarkdowntownApp {
     fn load(&mut self, path: &Path) {
         match Document::load(path) {
             Ok(doc) => {
-                self.status = format!("Opened {}", path.display());
+                self.set_status(format!("Opened {}", path.display()));
                 self.doc = doc;
                 self.settings.add_recent(path);
             }
             Err(e) => {
-                self.status = format!("Cannot open {}: {e}", path.display());
+                self.set_status(format!("Cannot open {}: {e}", path.display()));
                 if !path.exists() {
                     self.settings.remove_recent(path);
                 }
@@ -212,7 +212,7 @@ impl MarkdowntownApp {
                 self.doc.save_as(&path)
             }
         };
-        self.status = match (result, self.doc.path()) {
+        let status = match (result, self.doc.path()) {
             (Ok(()), Some(path)) => {
                 let path = path.to_owned();
                 self.settings.add_recent(&path);
@@ -222,6 +222,17 @@ impl MarkdowntownApp {
             (Ok(()), None) => "Saved".to_owned(),
             (Err(e), _) => format!("Cannot save: {e}"),
         };
+        self.set_status(status);
+    }
+
+    /// Сообщение в строке статуса; оно же — запись в журнал (ошибки — предупреждением).
+    fn set_status(&mut self, message: String) {
+        if message.starts_with("Cannot") {
+            log::warn!("{message}");
+        } else {
+            log::info!("{message}");
+        }
+        self.status = message;
     }
 
     // ----- Черновики восстановления -----
@@ -251,11 +262,9 @@ impl MarkdowntownApp {
         {
             drafts.remove(old_path.as_deref());
         }
-        if drafts
-            .save(&Draft::new(path, self.doc.text.clone()))
-            .is_ok()
-        {
-            self.draft_written = Some(current);
+        match drafts.save(&Draft::new(path, self.doc.text.clone())) {
+            Ok(()) => self.draft_written = Some(current),
+            Err(e) => log::warn!("cannot write recovery draft: {e}"),
         }
         self.last_draft_time = Instant::now();
     }
@@ -281,13 +290,13 @@ impl MarkdowntownApp {
         match self.doc.disk_change() {
             None => {}
             Some(DiskChange::Modified) if !self.doc.is_dirty() => match self.doc.reload() {
-                Ok(()) => self.status = "Reloaded: the file was changed on disk".into(),
-                Err(e) => self.status = format!("Cannot reload: {e}"),
+                Ok(()) => self.set_status("Reloaded: the file was changed on disk".into()),
+                Err(e) => self.set_status(format!("Cannot reload: {e}")),
             },
             Some(DiskChange::Modified) => self.dialog = Some(Dialog::ExternalChange),
             Some(DiskChange::Removed) => {
                 self.doc.accept_disk_state();
-                self.status = "The file was deleted on disk; save to recreate it".into();
+                self.set_status("The file was deleted on disk; save to recreate it".into());
             }
         }
     }
@@ -342,9 +351,9 @@ impl MarkdowntownApp {
                             match self.doc.reload() {
                                 Ok(()) => {
                                     self.discard_draft();
-                                    self.status = "Reloaded from disk".into();
+                                    self.set_status("Reloaded from disk".into());
                                 }
-                                Err(e) => self.status = format!("Cannot reload: {e}"),
+                                Err(e) => self.set_status(format!("Cannot reload: {e}")),
                             }
                             keep_open = false;
                         }
@@ -371,7 +380,7 @@ impl MarkdowntownApp {
                             self.doc = Document::recovered(draft.path.clone(), draft.text.clone());
                             // Черновик остаётся до сохранения: следующие записи его обновят.
                             self.draft_written = Some((self.doc.version(), draft.path.clone()));
-                            self.status = "Recovered unsaved changes".into();
+                            self.set_status("Recovered unsaved changes".into());
                             keep_open = false;
                         }
                         if ui.button("Discard").clicked() {
