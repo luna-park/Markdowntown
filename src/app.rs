@@ -26,6 +26,9 @@ graph TD
 ```
 "#;
 
+/// Название и версия в заголовке окна — по ним проще разбирать сообщения об ошибках.
+pub const APP_TITLE: &str = concat!("Markdowntown v", env!("CARGO_PKG_VERSION"));
+
 /// Минимальная ширина панели редактора, px.
 const MIN_EDITOR_WIDTH: f32 = 200.0;
 /// Минимальная ширина превью, px: его нельзя сжать разделителем до нуля.
@@ -409,7 +412,7 @@ impl MarkdowntownApp {
 
     fn window_title(&self) -> String {
         let dirty = if self.doc.is_dirty() { "• " } else { "" };
-        format!("{dirty}{} — Markdowntown", self.doc.display_name())
+        format!("{dirty}{} — {APP_TITLE}", self.doc.display_name())
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {

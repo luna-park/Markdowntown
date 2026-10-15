@@ -37,7 +37,7 @@ fn main() -> eframe::Result {
     let log_file = logging::init(data_dir.as_deref());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Markdowntown")
+            .with_title(app::APP_TITLE)
             .with_icon(window_icon())
             .with_inner_size([1200.0, 800.0])
             // Не меньше суммы минимальных ширин редактора и превью (см. app.rs).
@@ -61,7 +61,7 @@ fn main() -> eframe::Result {
         });
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("Markdowntown")
+            .set_title(app::APP_TITLE)
             .set_description(format!("Markdowntown could not start.\n\n{e}{details}"))
             .show();
     }
