@@ -36,7 +36,7 @@ falls back to software rendering.
 
 | Action | Keys |
 |---|---|
-| New / Open / Save / Save As | Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S |
+| New / Open / Save / Save As | Ctrl+N / Ctrl+O / Ctrl+S or F2 / Ctrl+Shift+S |
 | Close the tab / Next tab / Previous tab | Ctrl+W / Ctrl+Tab / Ctrl+Shift+Tab |
 | Export to HTML | Ctrl+Shift+E |
 | Show or hide the outline (list of headings) | Ctrl+Shift+O |

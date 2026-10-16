@@ -735,6 +735,8 @@ impl MarkdowntownApp {
         let new = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
         let open = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
         let save = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+        // F2 — сохранить, как в классических редакторах (Far, Norton).
+        let save_f2 = KeyboardShortcut::new(Modifiers::NONE, Key::F2);
         let save_as = KeyboardShortcut::new(shift, Key::S);
         let export = KeyboardShortcut::new(shift, Key::E);
         let outline = KeyboardShortcut::new(shift, Key::O);
@@ -748,7 +750,7 @@ impl MarkdowntownApp {
         // Сочетания с Shift проверяем первыми: иначе Ctrl+S съест Ctrl+Shift+S и т.п.
         if consume(&save_as) {
             self.save(true);
-        } else if consume(&save) {
+        } else if consume(&save) || consume(&save_f2) {
             self.save(false);
         } else if consume(&outline) {
             self.settings.show_outline = !self.settings.show_outline;
@@ -848,7 +850,7 @@ impl MarkdowntownApp {
                     }
                 });
                 ui.separator();
-                if ui.button("Save (Ctrl+S)").clicked() {
+                if ui.button("Save (Ctrl+S, F2)").clicked() {
                     self.save(false);
                 }
                 if ui.button("Save As… (Ctrl+Shift+S)").clicked() {
