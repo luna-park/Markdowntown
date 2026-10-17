@@ -155,6 +155,9 @@ pub struct MarkdowntownApp {
     exiting: bool,
     /// Вкладки, правки которых при выходе решили не сохранять.
     exit_discarded: Vec<u64>,
+    /// Заголовок окна, уже отправленный в окно. Каждая команда окна — это ещё и запрос
+    /// перерисовки: отправка заголовка в каждом кадре рисовала кадры без остановки.
+    window_title: String,
 
     drafts: Option<Drafts>,
     /// Идущий экспорт в HTML: итог (сообщение для статуса) придёт из фонового потока.
@@ -194,6 +197,7 @@ impl MarkdowntownApp {
             allow_close: false,
             exiting: false,
             exit_discarded: Vec::new(),
+            window_title: String::new(),
             drafts,
             export: None,
         };
@@ -1259,7 +1263,11 @@ impl eframe::App for MarkdowntownApp {
         self.poll_export(&ctx);
         self.write_drafts(&ctx);
         self.sync_settings(&ctx);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+        let title = self.window_title();
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
         // В конце кадра: Exit из меню или диалога закрывает окно в этом же кадре.
         self.handle_close(&ctx);
     }
