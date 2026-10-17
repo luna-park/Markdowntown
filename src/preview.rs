@@ -27,6 +27,9 @@ const PREVIEW_BODY_SIZE: f32 = 14.0;
 /// с текстом (Ctrl+колесо), длина строки не меняется.
 const READABLE_WIDTH: f32 = 50.0 * PREVIEW_BODY_SIZE;
 
+/// Текст сносок относительно основного (GitHub: 12 px при 16 px, у нас 12 pt при 14 pt).
+const FOOTNOTE_SCALE: f32 = 0.85;
+
 /// Шрифты и цвета превью: размеры — от `PREVIEW_BODY_SIZE` (код чуть мельче, как на
 /// GitHub), цвета текста — для чтения (см. [`style::apply_reading_colors`]).
 fn apply_preview_style(ui: &mut egui::Ui) {
@@ -52,6 +55,11 @@ pub struct Preview {
     /// Версия документа, для которой посчитаны `segments`.
     version: Option<(u64, u64)>,
     segments: Vec<Segment>,
+    /// Сноски, на которые есть ссылки, по порядку первой ссылки: индекс сегмента
+    /// определения. Показываются в конце документа, как на GitHub.
+    footnotes: Vec<usize>,
+    /// Номера сносок по меткам — для `egui_commonmark`.
+    footnote_numbers: HashMap<String, usize>,
     /// Время последней правки текущего документа; `None` — рендерить сразу.
     last_edit: Option<Instant>,
     /// Последняя успешно показанная диаграмма для каждого mermaid-блока (по порядку) —
@@ -94,7 +102,23 @@ impl Preview {
             if !same_doc {
                 self.shown.clear();
             }
-            self.segments = segment::split(&doc.text);
+            let split = segment::split_all(&doc.text);
+            self.segments = split.segments;
+            self.footnotes = split
+                .footnotes
+                .iter()
+                .filter_map(|f| {
+                    self.segments
+                        .iter()
+                        .position(|s| s.range.start == f.definition)
+                })
+                .collect();
+            self.footnote_numbers = split
+                .footnotes
+                .into_iter()
+                .enumerate()
+                .map(|(i, f)| (f.label, i + 1))
+                .collect();
             self.version = Some(doc.version());
         }
 
@@ -117,6 +141,12 @@ impl Preview {
         let image_base = doc.base_dir().map(file_uri_prefix);
         let mut mermaid_index = 0;
         let mut anchors = Vec::new();
+        let mut footnote_tops = Vec::new();
+        // Порядок показа: блоки документа, затем сноски (`true` — в разделе сносок).
+        let order: Vec<(usize, bool)> = (0..self.segments.len())
+            .map(|i| (i, false))
+            .chain(self.footnotes.iter().map(|&i| (i, true)))
+            .collect();
 
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt("preview_scroll")
@@ -144,13 +174,29 @@ impl Preview {
                 let content_top = ui.min_rect().top();
                 let width = ui.available_width();
                 let item_spacing = ui.spacing().item_spacing.y;
-                for (i, seg) in self.segments.iter().enumerate() {
+                for &(i, in_footnotes) in &order {
+                    let seg = &self.segments[i];
+                    if in_footnotes && footnote_tops.is_empty() {
+                        footnotes_rule(ui, block_gap);
+                    }
                     let top = ui.cursor().top() - content_top;
-                    anchors.push((seg.range.start, top));
+                    if in_footnotes {
+                        // Якоря — по возрастанию байтов, поэтому у сносок внизу свой список.
+                        footnote_tops.push((seg.range.start, top));
+                    } else {
+                        anchors.push((seg.range.start, top));
+                    }
                     match &seg.kind {
-                        SegmentKind::Markdown { appendix } => {
+                        // Определение сноски на своём месте не показывается — оно внизу.
+                        SegmentKind::Markdown {
+                            footnote: Some(_), ..
+                        } if !in_footnotes => {}
+                        SegmentKind::Markdown { appendix, .. } => {
                             let block = &doc.text[seg.range.clone()];
-                            let key = block_key(block, appendix, width, scale_bits);
+                            let mut key = block_key(block, appendix, width, scale_bits);
+                            if in_footnotes {
+                                key = key.rotate_left(1); // другой стиль — другая высота
+                            }
                             if let Some(&BlockHeight {
                                 height,
                                 stable: true,
@@ -179,11 +225,18 @@ impl Preview {
                                     .max_rect(block_rect)
                                     .layout(*ui.layout()),
                             );
+                            if in_footnotes {
+                                footnote_style(&mut block_ui);
+                            }
+                            let render = RenderContext {
+                                math_fn: &math_fn,
+                                image_base: image_base.as_deref(),
+                                footnote_numbers: &self.footnote_numbers,
+                            };
                             let edited = show_markdown(
                                 &mut block_ui,
                                 &mut self.md_cache,
-                                &math_fn,
-                                image_base.as_deref(),
+                                &render,
                                 doc,
                                 seg,
                                 appendix,
@@ -198,7 +251,12 @@ impl Preview {
                                 ctx.request_repaint();
                                 break;
                             }
-                            ui.add_space(block_gap);
+                            // Сноски — плотнее, как пункты списка на GitHub.
+                            ui.add_space(if in_footnotes {
+                                (block_gap * 0.4).round()
+                            } else {
+                                block_gap
+                            });
                             let height = ui.cursor().top() - content_top - top;
                             let frame = self.frame;
                             let entry = self.heights.entry(key).or_insert(BlockHeight {
@@ -251,8 +309,26 @@ impl Preview {
             offset: output.state.offset.y,
             max_offset: (output.content_size.y - viewport).max(0.0),
             content_height: output.content_size.y,
+            footnotes: footnote_tops,
         }
     }
+}
+
+/// Раздел сносок в конце документа — под линией, как на GitHub.
+fn footnotes_rule(ui: &mut egui::Ui, gap: f32) {
+    ui.add_space(gap);
+    let y = ui.painter().round_to_pixel_center(ui.cursor().top());
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    ui.painter().hline(ui.max_rect().x_range(), y, stroke);
+    ui.add_space(gap);
+}
+
+/// Текст сноски — мельче и приглушённее основного (как у GitHub).
+fn footnote_style(ui: &mut egui::Ui) {
+    for font in ui.style_mut().text_styles.values_mut() {
+        font.size *= FOOTNOTE_SCALE;
+    }
+    ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
 }
 
 /// Колонка по центру `ui` шириной не больше `max_width`.
@@ -416,14 +492,21 @@ fn block_key(block: &str, appendix: &str, width: f32, scale_bits: u32) -> u64 {
     h.finish()
 }
 
+/// Общее для всех блоков кадра.
+struct RenderContext<'a> {
+    math_fn: &'a egui_commonmark::RenderMathFn,
+    /// Префикс относительных путей картинок (папка документа).
+    image_base: Option<&'a str>,
+    footnote_numbers: &'a HashMap<String, usize>,
+}
+
 /// Рендерит Markdown-блок. `appendix` — невидимый хвост (определения ссылок и сносок
 /// из других блоков). Возвращает `true`, если превью изменило документ
 /// (переключили чекбокс task-list).
 fn show_markdown(
     ui: &mut egui::Ui,
     cache: &mut CommonMarkCache,
-    math_fn: &egui_commonmark::RenderMathFn,
-    image_base: Option<&str>,
+    render: &RenderContext,
     doc: &mut Document,
     seg: &Segment,
     appendix: &str,
@@ -431,8 +514,10 @@ fn show_markdown(
     let block_len = seg.range.len();
     let mut viewer = CommonMarkViewer::new()
         .render_until(block_len)
-        .render_math_fn(Some(math_fn));
-    if let Some(base) = image_base {
+        .render_math_fn(Some(render.math_fn))
+        .footnote_numbers(render.footnote_numbers)
+        .alerts(crate::alerts::preview_bundle(ui.visuals().dark_mode));
+    if let Some(base) = render.image_base {
         viewer = viewer.default_implicit_uri_scheme(base);
     }
     let mut text = String::with_capacity(block_len + appendix.len());

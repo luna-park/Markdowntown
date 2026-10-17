@@ -125,6 +125,22 @@ fn top_aligned<R>(ui: &mut Ui, enabled: bool, add: impl FnOnce(&mut Ui) -> R) ->
     inner
 }
 
+/// Markdowntown patch: линия во всю ширину под заголовком H1/H2 — как `border-bottom`
+/// у GitHub: отступ под текстом 0.3 высоты строки основного текста, линия цветом рамок.
+fn heading_rule(ui: &mut Ui) {
+    let gap = (ui.text_style_height(&TextStyle::Body) * 0.3).round();
+    break_row(ui, gap);
+    let top = ui.cursor().top();
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    // Рисуется по центру пикселя (чётко), но высота блока от этого не зависит: округление
+    // зависит от положения на экране, и пропущенный при прокрутке блок занимал бы другую
+    // высоту, чем нарисованный, — всё ниже него сдвигалось бы.
+    let y = ui.painter().round_to_pixel_center(top + stroke.width / 2.0);
+    ui.painter().hline(ui.max_rect().x_range(), y, stroke);
+    // Линия — часть блока: его высота (и место под следующий блок) учитывает её.
+    ui.expand_to_include_y(top + stroke.width);
+}
+
 /// Markdowntown patch: есть ли в пункте абзацы верхнего уровня — признак свободного списка.
 fn has_top_level_paragraph(events: &[(pulldown_cmark::Event, Range<usize>)]) -> bool {
     let mut depth = 0usize;
@@ -161,6 +177,8 @@ pub struct CommonMarkViewerInternal {
     is_list_item: bool,
     def_list: DefinitionList,
     is_table: bool,
+    /// Markdowntown patch: метка определения сноски, которое сейчас рисуется (для «↩»).
+    footnote: Option<String>,
     /// Markdowntown patch: выравнивание столбцов текущей таблицы (`:---:`, `---:`).
     table_alignments: Vec<pulldown_cmark::Alignment>,
     is_blockquote: bool,
@@ -187,6 +205,7 @@ impl CommonMarkViewerInternal {
             code_block: None,
             html_block: String::new(),
             is_table: false,
+            footnote: None,
             table_alignments: Vec::new(),
             is_blockquote: false,
             checkbox_events: Vec::new(),
@@ -817,7 +836,7 @@ impl CommonMarkViewerInternal {
                 }
             }
             pulldown_cmark::Event::FootnoteReference(footnote) => {
-                footnote_start(ui, &footnote);
+                footnote_start(ui, &footnote, &options.footnote_number(&footnote));
             }
             pulldown_cmark::Event::SoftBreak => {
                 soft_break(ui);
@@ -957,7 +976,8 @@ impl CommonMarkViewerInternal {
 
                 self.line.should_start_newline = false;
                 self.line.should_end_newline = false;
-                footnote(ui, &note);
+                footnote(ui, &options.footnote_number(&note));
+                self.footnote = Some(note.to_string());
             }
             pulldown_cmark::Tag::Table(alignments) => {
                 self.is_table = true;
@@ -1023,6 +1043,10 @@ impl CommonMarkViewerInternal {
                 self.line.try_insert_end(ui);
             }
             pulldown_cmark::TagEnd::Heading { .. } => {
+                // Markdowntown patch: под H1 и H2 — линия, как на GitHub (и в HTML-экспорте).
+                if matches!(self.text_style.heading, Some(0 | 1)) {
+                    heading_rule(ui);
+                }
                 self.line.try_insert_end(ui);
                 self.text_style.heading = None;
             }
@@ -1046,6 +1070,10 @@ impl CommonMarkViewerInternal {
             }
             pulldown_cmark::TagEnd::Item => {}
             pulldown_cmark::TagEnd::FootnoteDefinition => {
+                // Markdowntown patch: «↩» к ссылке — в конце текста сноски, как на GitHub.
+                if let Some(label) = self.footnote.take() {
+                    footnote_backref(ui, &label);
+                }
                 self.line.should_start_newline = true;
                 self.line.should_end_newline = true;
                 self.line.try_insert_end(ui);

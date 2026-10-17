@@ -8,6 +8,10 @@ pub struct Alert {
     pub accent_color: egui::Color32,
     /// The icon that will be displayed
     pub icon: char,
+    /// Markdowntown patch: значок картинкой (белый — окрашивается в `accent_color`) вместо
+    /// символа `icon`. Символы-эмодзи рисуются одним цветом из запасного шрифта, другой
+    /// формы, чем значки GitHub, и их первая прорисовка задерживала кадр.
+    pub icon_image: Option<egui::ImageSource<'static>>,
     /// The identifier that will be used to look for the blockquote such as NOTE and TIP
     pub identifier: String,
     /// The identifier that will be shown when rendering. E.g: Note and Tip
@@ -18,9 +22,28 @@ pub struct Alert {
 pub fn alert_ui(alert: &Alert, ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     blockquote(ui, alert.accent_color, |ui| {
         newline(ui);
-        ui.colored_label(alert.accent_color, alert.icon.to_string());
-        ui.add_space(3.0);
-        ui.colored_label(alert.accent_color, &alert.identifier_rendered);
+        match &alert.icon_image {
+            Some(image) => {
+                // Как на GitHub: значок размером с текст.
+                let size = egui::TextStyle::Body.resolve(ui.style()).size;
+                ui.add(
+                    egui::Image::new(image.clone())
+                        .tint(alert.accent_color)
+                        .fit_to_exact_size(egui::vec2(size, size)),
+                );
+                ui.add_space(6.0);
+            }
+            None => {
+                ui.colored_label(alert.accent_color, alert.icon.to_string());
+                ui.add_space(3.0);
+            }
+        }
+        // Markdowntown patch: заголовок жирным, как на GitHub.
+        let mut title = egui::RichText::new(&alert.identifier_rendered).color(alert.accent_color);
+        if let Some(bold) = crate::misc::bold_family(ui) {
+            title = title.family(bold);
+        }
+        ui.label(title);
         // end line
         newline(ui);
         add_contents(ui);
@@ -66,30 +89,35 @@ impl AlertBundle {
             Alert {
                 accent_color: egui::Color32::from_rgb(10, 80, 210),
                 icon: '❕',
+                icon_image: None,
                 identifier: "NOTE".to_owned(),
                 identifier_rendered: "Note".to_owned(),
             },
             Alert {
                 accent_color: egui::Color32::from_rgb(0, 130, 20),
                 icon: '💡',
+                icon_image: None,
                 identifier: "TIP".to_owned(),
                 identifier_rendered: "Tip".to_owned(),
             },
             Alert {
                 accent_color: egui::Color32::from_rgb(150, 30, 140),
                 icon: '💬',
+                icon_image: None,
                 identifier: "IMPORTANT".to_owned(),
                 identifier_rendered: "Important".to_owned(),
             },
             Alert {
                 accent_color: egui::Color32::from_rgb(200, 120, 0),
                 icon: '⚠',
+                icon_image: None,
                 identifier: "WARNING".to_owned(),
                 identifier_rendered: "Warning".to_owned(),
             },
             Alert {
                 accent_color: egui::Color32::from_rgb(220, 0, 0),
                 icon: '🔴',
+                icon_image: None,
                 identifier: "CAUTION".to_owned(),
                 identifier_rendered: "Caution".to_owned(),
             },

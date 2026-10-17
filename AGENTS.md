@@ -47,9 +47,10 @@ cargo fmt             # форматирование
 
 - `build.rs` — ресурсы exe (иконка, сведения о версии) через `winresource` (нужен `rc.exe`
   из Windows SDK).
-- `assets/` — иконка, `fonts/Ubuntu-Bold.ttf` (жирный шрифт заголовков превью, вшит);
+- `assets/` — иконка, `fonts/Ubuntu-Bold.ttf` (жирный шрифт заголовков превью, вшит),
+  `octicons/` — значки alerts (Octicons GitHub, вшиты);
   `licenses/` — лицензии, которые `cargo-about` не находит сам (шрифты KaTeX внутри
-  `ratex-katex-fonts`, Ubuntu Bold — UFL), копируются в архив целиком; `about.toml` / `about.hbs` — допустимые
+  `ratex-katex-fonts`, Ubuntu Bold — UFL, Octicons — MIT), копируются в архив целиком; `about.toml` / `about.hbs` — допустимые
   лицензии зависимостей и шаблон `THIRD_PARTY_LICENSES.html`.
 - `src/main.rs` — точка входа, настройки окна (`NativeOptions`), путь persistence
   (`<каталог данных>pp.ron`), `run_native`.
@@ -72,7 +73,8 @@ cargo fmt             # форматирование
 - `src/fonts.rs` — системные шрифты Windows: запасные для символов, выбор шрифта редактора
   (семейство `editor`), жирный шрифт превью — заголовки и `**жирный**` (семейство `heading`,
   Ubuntu Bold из `assets/fonts`); `install` вызывать при старте и смене шрифта.
-- `src/app.rs` — `MarkdowntownApp`: вкладки (всегда хотя бы одна), меню File / View, строка
+- `src/app.rs` — `MarkdowntownApp`: вкладки (всегда хотя бы одна), меню File / View / Help (About — версия, автор, ссылка на
+  релизы), строка
   вкладок, горячие клавиши, панели и режимы вида, строка статуса. Действия (`Action`: New,
   Open, Close, Exit) идут через `request`: Open открывает файл в новой вкладке (уже открытый —
   переключает на него; пустую безымянную вкладку заменяет), Close и Exit при несохранённых
@@ -98,11 +100,16 @@ cargo fmt             # форматирование
 - `src/segment.rs` — `split()`: документ → сегменты, по одному на блок верхнего уровня
   (Markdown) или ```` ```mermaid ```` верхнего уровня, с байтовыми диапазонами и номерами
   строк. У Markdown-сегмента `appendix` — невидимый хвост с определениями ссылок и сносок
-  из других блоков, чтобы поблочный рендер их находил.
+  из других блоков, чтобы поблочный рендер их находил; `footnote` — метка, если блок —
+  определение сноски. `split_all` ещё и нумерует сноски, как GitHub, — по порядку первой
+  ссылки (`Split::footnotes`).
 - `src/preview.rs` — `Preview`: поблочный рендер — каждый Markdown-блок отдельным вызовом
   `egui_commonmark` (`render_until` скрывает `appendix`); невидимые блоки с подтверждённой
   высотой не рисуются, а занимают место (кэш высот по тексту, ширине и масштабу) — кадр
-  на 200 КБ ~2 мс. Mermaid-блоки — через `DiagramService` с debounce. Якоря синхронной
+  на 200 КБ ~2 мс. Сноски — как на GitHub: ссылка — номер цветом ссылок, определения —
+  не на своём месте, а в конце (под линией, мельче, с «↩»); клик по номеру и «↩» —
+  якоря `#fn-…` / `#fnref-…` (`links::find_anchor`), позиции сносок внизу —
+  `PreviewGeometry::footnotes`. Mermaid-блоки — через `DiagramService` с debounce. Якоря синхронной
   прокрутки — верх каждого блока. Размер текста — `PREVIEW_BODY_SIZE` (14 pt), код — 0.9
   от него; цвета текста — как у GitHub. View → Readable width (по умолчанию включено) —
   колонка по центру не шире `READABLE_WIDTH` (50 em, ~85–90 символов в строке), границы —
@@ -128,9 +135,12 @@ cargo fmt             # форматирование
   - `highlight.rs` — Markdown → `LayoutJob` (флаги на байт по событиям `pulldown-cmark`);
   - `commands.rs` — чистые функции правок: обёртка маркерами, ссылка, продолжение списков;
   - `search.rs` — поиск (в т.ч. без учёта регистра для кириллицы) и замена.
+- `src/alerts.rs` — GFM alerts как на GitHub: значки Octicons, заголовки, цвета светлой
+  и тёмной темы (`ALERTS`); набор для превью (`preview_bundle`) и SVG для экспорта.
 - `src/export.rs` — экспорт в HTML: события `pulldown-cmark` → `push_html` с подменой
   блоков кода (`syntect`, классы `hl-*`), mermaid (SVG в `<picture>`, размер из
-  `viewBox`), локальных картинок (data URI) и raw HTML (текстом). `PageTheme` — по теме
+  `viewBox`), локальных картинок (data URI) и raw HTML (текстом); у alerts — заголовок со значком
+  (`markdown-alert-title`); сноски — как в превью, в конце (`footnotes_to_end`). `PageTheme` — по теме
   приложения: Auto (`prefers-color-scheme`) / Light / Dark; печать светлая. В приложении — в фоновом
   потоке. Примеры для просмотра: `cargo test export_examples -- --ignored` → `target\export\`.
 - `src/file_assoc.rs` — ассоциация с `.md` / `.markdown` в HKCU (`winreg`): `register`,

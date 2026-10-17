@@ -191,7 +191,12 @@ impl Tab {
         editor: &EditorGeometry,
         preview: &PreviewGeometry,
     ) {
-        self.pending_scroll = self.scroll_sync.update(&self.doc.text, editor, preview);
+        self.pending_scroll = if self.outline_jump.is_some() {
+            self.scroll_sync.observe(editor, preview);
+            (None, None)
+        } else {
+            self.scroll_sync.update(&self.doc.text, editor, preview)
+        };
         // Превью тоже переходит к заголовку — и при выключенной синхронной прокрутке.
         self.jump_preview(preview);
         if self.pending_scroll != (None, None) {
@@ -229,7 +234,7 @@ impl Tab {
             return;
         };
         let target =
-            (preview.y_for_byte(byte, self.doc.text.len()) - 8.0).clamp(0.0, preview.max_offset);
+            (preview.y_for_target(byte, self.doc.text.len()) - 8.0).clamp(0.0, preview.max_offset);
         if (target - preview.offset).abs() > 1.0 {
             self.pending_scroll.1 = Some(target);
             self.scroll_sync.expect_preview(target);

@@ -59,16 +59,52 @@ pub fn number_point(ui: &mut Ui, number: &str) {
 }
 
 #[inline]
-pub fn footnote_start(ui: &mut Ui, note: &str) {
-    ui.label(RichText::new(note).raised().strong().small());
+/// Markdowntown patch: ссылка на сноску — номер цветом ссылок, как на GitHub; клик
+/// открывает `#fn-<метка>` (приложение прокручивает к сноске).
+pub fn footnote_start(ui: &mut Ui, label: &str, number: &str) {
+    let text = RichText::new(number)
+        .raised()
+        .small()
+        .color(ui.visuals().hyperlink_color);
+    // Цифра мелкая — по ней легко промахнуться: нажимать можно и рядом с ней. По бокам —
+    // свои поля: текст превью выделяемый, и следующая за цифрой надпись (она добавлена
+    // позже, значит «выше») перехватила бы нажатие в общей с ней области.
+    const PAD: f32 = 3.0;
+    ui.add_space(PAD);
+    let label_response = ui.add(egui::Label::new(text).sense(Sense::hover()));
+    ui.add_space(PAD);
+    let hit = label_response.rect.expand2(egui::vec2(PAD, 4.0));
+    let response = ui
+        .interact(hit, label_response.id.with("hit"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        ui.ctx()
+            .open_url(egui::OpenUrl::same_tab(format!("#fn-{label}")));
+    }
+}
+
+/// Markdowntown patch: обратная ссылка в конце сноски — к месту первой ссылки на неё
+/// (`#fnref-<метка>`), как «↩» на GitHub.
+pub fn footnote_backref(ui: &mut Ui, label: &str) {
+    ui.add_space(width_body_space(ui));
+    let text = RichText::new("↩").color(ui.visuals().hyperlink_color);
+    let response = ui
+        .add(egui::Label::new(text).sense(Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Back to the reference");
+    if response.clicked() {
+        ui.ctx()
+            .open_url(egui::OpenUrl::same_tab(format!("#fnref-{label}")));
+    }
 }
 
 pub fn footnote(ui: &mut Ui, text: &str) {
     // Markdowntown patch: поле метки расширяется под длинную метку (`[^note]`) —
     // в оригинале оно фиксированной ширины, и метка вылезала влево за край.
-    let font = TextStyle::Small.resolve(ui.style());
+    // Номер — размером и цветом текста сноски, как маркер нумерованного списка на GitHub.
+    let font = TextStyle::Body.resolve(ui.style());
     let label = format!("{text}.");
-    let color = ui.visuals().strong_text_color();
+    let color = ui.visuals().text_color();
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label, font, color));
     let width = (width_body_space(ui) * 4.0).max(galley.size().x + width_body_space(ui));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height_body(ui)), Sense::hover());

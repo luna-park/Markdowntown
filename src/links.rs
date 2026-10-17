@@ -136,7 +136,25 @@ pub fn find_anchor(text: &str, anchor: &str) -> Option<usize> {
             return Some(heading.byte);
         }
     }
-    None
+    find_footnote(text, anchor)
+}
+
+/// Якоря сносок, как в HTML-экспорте и у GitHub: `fn-<метка>` — определение сноски,
+/// `fnref-<метка>` — первая ссылка на неё.
+fn find_footnote(text: &str, anchor: &str) -> Option<usize> {
+    let (label, definition) = match anchor.strip_prefix("fnref-") {
+        Some(label) => (label, false),
+        None => (anchor.strip_prefix("fn-")?, true),
+    };
+    let footnote = crate::segment::split_all(text)
+        .footnotes
+        .into_iter()
+        .find(|f| f.label == label)?;
+    Some(if definition {
+        footnote.definition
+    } else {
+        footnote.first_ref
+    })
 }
 
 /// Открыть локальный файл программой по умолчанию (безопасные типы) или показать
@@ -313,5 +331,13 @@ mod tests {
         assert_eq!(find_anchor(text, "same-1"), text.rfind("## Same"));
         assert_eq!(find_anchor(text, "Intro"), Some(0), "case-insensitive");
         assert_eq!(find_anchor(text, "nope"), None);
+    }
+
+    #[test]
+    fn footnote_anchors() {
+        let text = "Text[^n] and again[^n].\n\n[^n]: The note.\n";
+        assert_eq!(find_anchor(text, "fn-n"), text.find("[^n]:"));
+        assert_eq!(find_anchor(text, "fnref-n"), text.find("[^n]"));
+        assert_eq!(find_anchor(text, "fn-missing"), None);
     }
 }

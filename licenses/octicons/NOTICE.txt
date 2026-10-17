@@ -1,0 +1,12 @@
+Octicons (alert icons)
+======================
+
+Markdowntown embeds five icons from GitHub's Octicons for GFM alerts (> [!NOTE] and
+others) in the preview and in HTML export: info-16, light-bulb-16, report-16,
+alert-16 and stop-16.
+
+Copyright (c) GitHub Inc. The icons are part of Primer Octicons:
+  https://github.com/primer/octicons
+
+They are licensed under the MIT License. The full license text is in LICENSE in this
+directory.

@@ -8,6 +8,10 @@
 //! с блоком, но не отображаются.
 //!
 //! Mermaid внутри списка или цитаты остаётся частью своего блока (обычный код).
+//!
+//! Сноски — как на GitHub: нумеруются по порядку первой ссылки на них (`[^note]` может
+//! стать «2»), а определения показываются не на своём месте, а в конце документа
+//! (`Split::footnotes`; сегмент определения помечен `footnote`).
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -16,9 +20,11 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentKind {
-    /// `appendix` — невидимый хвост для рендера (определения ссылок и сносок).
+    /// `appendix` — невидимый хвост для рендера (определения ссылок и сносок);
+    /// `footnote` — метка, если блок — определение сноски верхнего уровня.
     Markdown {
         appendix: String,
+        footnote: Option<String>,
     },
     Mermaid {
         source: String,
@@ -32,6 +38,24 @@ pub struct Segment {
     /// Номер первой строки (с 0).
     pub first_line: usize,
     pub kind: SegmentKind,
+}
+
+/// Сноска, на которую есть ссылка. Номер — позиция в `Split::footnotes` + 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Footnote {
+    pub label: String,
+    /// Начало определения (байт).
+    pub definition: usize,
+    /// Первая ссылка на сноску (байт).
+    pub first_ref: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct Split {
+    pub segments: Vec<Segment>,
+    /// Сноски по порядку первой ссылки; определения без ссылок сюда не попадают
+    /// (GitHub их не показывает).
+    pub footnotes: Vec<Footnote>,
 }
 
 /// Те же опции, что у `egui_commonmark`, — чтобы границы блоков совпадали.
@@ -52,13 +76,22 @@ pub(crate) fn is_mermaid(info: &str) -> bool {
 
 enum Block {
     Markdown,
+    Footnote(String),
     Mermaid(String),
 }
 
+/// Только сегменты (см. [`split_all`]).
+#[cfg(test)]
 pub fn split(text: &str) -> Vec<Segment> {
+    split_all(text).segments
+}
+
+pub fn split_all(text: &str) -> Split {
     let mut blocks: Vec<(Range<usize>, Block)> = Vec::new();
     // Определения сносок верхнего уровня: метка → диапазон.
     let mut footnotes: HashMap<String, Range<usize>> = HashMap::new();
+    // Ссылки на сноски — по порядку, первая на каждую метку.
+    let mut refs: Vec<(String, usize)> = Vec::new();
     let mut depth = 0usize;
     let mut current: Option<(usize, Block)> = None;
 
@@ -73,7 +106,7 @@ pub fn split(text: &str) -> Vec<Segment> {
                         }
                         Tag::FootnoteDefinition(label) => {
                             footnotes.insert(label.to_string(), range.clone());
-                            Block::Markdown
+                            Block::Footnote(label.to_string())
                         }
                         _ => Block::Markdown,
                     };
@@ -94,6 +127,11 @@ pub fn split(text: &str) -> Vec<Segment> {
                     && let Some((_, Block::Mermaid(source))) = current.as_mut()
                 {
                     source.push_str(&t);
+                }
+            }
+            Event::FootnoteReference(label) => {
+                if !refs.iter().any(|(l, _)| *l == *label) {
+                    refs.push((label.to_string(), range.start));
                 }
             }
             // Блоки без вложенности.
@@ -122,15 +160,20 @@ pub fn split(text: &str) -> Vec<Segment> {
     // Номера строк — одним проходом: блоки идут по возрастанию смещений.
     let mut line = 0;
     let mut counted_to = 0;
-    blocks
+    let segments = blocks
         .into_iter()
         .map(|(range, block)| {
             line += count_newlines(&text.as_bytes()[counted_to..range.start]);
             counted_to = range.start;
+            let footnote = match &block {
+                Block::Footnote(label) => Some(label.clone()),
+                _ => None,
+            };
             let kind = match block {
                 Block::Mermaid(source) => SegmentKind::Mermaid { source },
-                Block::Markdown => SegmentKind::Markdown {
+                Block::Markdown | Block::Footnote(_) => SegmentKind::Markdown {
                     appendix: appendix(text, &range, &link_defs, &footnotes),
+                    footnote,
                 },
             };
             Segment {
@@ -139,7 +182,22 @@ pub fn split(text: &str) -> Vec<Segment> {
                 kind,
             }
         })
-        .collect()
+        .collect();
+    let footnotes = refs
+        .into_iter()
+        .filter_map(|(label, first_ref)| {
+            let definition = footnotes.get(&label)?.start;
+            Some(Footnote {
+                label,
+                definition,
+                first_ref,
+            })
+        })
+        .collect();
+    Split {
+        segments,
+        footnotes,
+    }
 }
 
 /// Невидимый хвост блока: все определения ссылок (если блок может на них ссылаться)
@@ -202,7 +260,7 @@ mod tests {
 
     fn appendix_of(text: &str, index: usize) -> String {
         match &split(text)[index].kind {
-            SegmentKind::Markdown { appendix } => appendix.clone(),
+            SegmentKind::Markdown { appendix, .. } => appendix.clone(),
             SegmentKind::Mermaid { .. } => panic!("not markdown"),
         }
     }
@@ -295,6 +353,33 @@ Paragraph after.
         assert_eq!(segs.len(), 2);
         assert!(segs[0].range.end <= segs[1].range.start);
         assert!(!text[segs[0].range.clone()].contains("Paragraph"));
+    }
+
+    #[test]
+    fn footnotes_are_numbered_by_first_reference() {
+        let text = "B[^b] and A[^a], again B[^b].
+
+[^a]: First.
+
+[^b]: Second.
+
+[^unused]: Never referenced.
+";
+        let split = split_all(text);
+        let labels: Vec<_> = split.footnotes.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, ["b", "a"]);
+        assert_eq!(split.footnotes[0].first_ref, text.find("[^b]").unwrap());
+        assert_eq!(split.footnotes[0].definition, text.find("[^b]:").unwrap());
+        // Определения — отдельные сегменты с меткой.
+        let marked: Vec<_> = split
+            .segments
+            .iter()
+            .filter_map(|s| match &s.kind {
+                SegmentKind::Markdown { footnote, .. } => footnote.clone(),
+                SegmentKind::Mermaid { .. } => None,
+            })
+            .collect();
+        assert_eq!(marked, ["a", "b", "unused"]);
     }
 
     #[test]

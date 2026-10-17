@@ -13,9 +13,22 @@ pub struct PreviewGeometry {
     pub offset: f32,
     pub max_offset: f32,
     pub content_height: f32,
+    /// Сноски в конце превью: (байт определения, Y) — не по порядку байтов, поэтому
+    /// не в `anchors`.
+    pub footnotes: Vec<(usize, f32)>,
 }
 
 impl PreviewGeometry {
+    /// Y для перехода к месту документа: у определения сноски — её место в конце превью.
+    /// Иначе — верх блока, в котором `byte` (а не точка внутри него: строка со ссылкой
+    /// на сноску оказалась бы срезанной верхним краем).
+    pub fn y_for_target(&self, byte: usize, text_len: usize) -> f32 {
+        if let Some(&(_, y)) = self.footnotes.iter().find(|(start, _)| *start == byte) {
+            return y;
+        }
+        self.bracket(|(pos, _)| *pos <= byte, text_len).0.1
+    }
+
     pub fn y_for_byte(&self, byte: usize, text_len: usize) -> f32 {
         let (a, b) = self.bracket(|(pos, _)| *pos <= byte, text_len);
         lerp_by(byte as f32, (a.0 as f32, a.1), (b.0 as f32, b.1))
@@ -61,7 +74,8 @@ enum Pane {
 
 pub struct ScrollSync {
     pub enabled: bool,
-    driver: Pane,
+    /// `None` — после перехода, пока пользователь не прокрутит одну из панелей.
+    driver: Option<Pane>,
     /// Смещения, которые панели должны иметь после нашей последней команды.
     expected_editor: f32,
     expected_preview: f32,
@@ -71,7 +85,7 @@ impl Default for ScrollSync {
     fn default() -> Self {
         Self {
             enabled: true,
-            driver: Pane::Editor,
+            driver: Some(Pane::Editor),
             expected_editor: 0.0,
             expected_preview: 0.0,
         }
@@ -88,6 +102,16 @@ impl ScrollSync {
         self.expected_preview = offset;
     }
 
+    /// Идёт переход (оглавление, ссылка на сноску): панели прокручены командой, а не
+    /// пользователем — запомнить их смещения и не подгонять одну под другую, пока
+    /// пользователь сам не прокрутит одну из них. У сноски место в редакторе (определение)
+    /// и в превью (раздел внизу) разные, и иначе редактор утащил бы превью обратно в текст.
+    pub fn observe(&mut self, editor: &EditorGeometry, preview: &PreviewGeometry) {
+        self.expected_editor = editor.offset;
+        self.expected_preview = preview.offset;
+        self.driver = None;
+    }
+
     /// Возвращает новые смещения (редактор, превью) для следующего кадра.
     pub fn update(
         &mut self,
@@ -101,15 +125,16 @@ impl ScrollSync {
             return (None, None);
         }
         if (editor.offset - self.expected_editor).abs() > EPS {
-            self.driver = Pane::Editor;
+            self.driver = Some(Pane::Editor);
         } else if (preview.offset - self.expected_preview).abs() > EPS {
-            self.driver = Pane::Preview;
+            self.driver = Some(Pane::Preview);
         }
         self.expected_editor = editor.offset;
         self.expected_preview = preview.offset;
 
         match self.driver {
-            Pane::Editor => {
+            None => {}
+            Some(Pane::Editor) => {
                 let target = if editor.offset >= editor.max_offset - EPS && editor.max_offset > 0.0
                 {
                     preview.max_offset
@@ -123,7 +148,7 @@ impl ScrollSync {
                     return (None, Some(target));
                 }
             }
-            Pane::Preview => {
+            Some(Pane::Preview) => {
                 let target =
                     if preview.offset >= preview.max_offset - EPS && preview.max_offset > 0.0 {
                         editor.max_offset
@@ -152,7 +177,19 @@ mod tests {
             offset: 0.0,
             max_offset: 300.0,
             content_height: 500.0,
+            footnotes: vec![(150, 450.0)],
         }
+    }
+
+    #[test]
+    fn footnote_targets_go_to_the_footnotes_section() {
+        let g = geometry();
+        // Определение сноски (байт 150) показано внизу, а не между якорями.
+        assert_eq!(g.y_for_target(150, 300), 450.0);
+        // Остальное — верх блока: и начало блока, и место внутри него.
+        assert_eq!(g.y_for_target(100, 300), 50.0);
+        assert_eq!(g.y_for_target(160, 300), 50.0);
+        assert_eq!(g.y_for_target(5, 300), 0.0);
     }
 
     #[test]
@@ -180,6 +217,7 @@ mod tests {
             offset: 0.0,
             max_offset: 0.0,
             content_height: 100.0,
+            footnotes: vec![],
         };
         assert_eq!(g.y_for_byte(50, 100), 50.0);
     }

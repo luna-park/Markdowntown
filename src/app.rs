@@ -127,7 +127,14 @@ enum Dialog {
     ExternalChange,
     /// Найден черновик после аварийного завершения.
     Recover(Draft),
+    /// Help → About: название, версия, автор, ссылка на релизы.
+    About,
 }
+
+/// Автор — в строке меню и в окне About.
+const AUTHOR: &str = "luna-park discoteque";
+/// Страница релизов: новые версии скачиваются отсюда.
+const RELEASES_URL: &str = "https://github.com/luna-park/Markdowntown/releases";
 
 pub struct MarkdowntownApp {
     /// Всегда хотя бы одна вкладка.
@@ -703,6 +710,28 @@ impl MarkdowntownApp {
                         }
                     });
                 }
+                Dialog::About => {
+                    ui.vertical_centered(|ui| {
+                        ui.add(
+                            egui::Image::new(egui::include_image!("../assets/icon-256.png"))
+                                .fit_to_exact_size(egui::vec2(64.0, 64.0)),
+                        );
+                        ui.heading("Markdowntown");
+                        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                        ui.add_space(4.0);
+                        ui.label(env!("CARGO_PKG_DESCRIPTION"));
+                        ui.add_space(8.0);
+                        ui.label(format!("© 2026 {AUTHOR}"));
+                        ui.weak(format!("License: {}", env!("CARGO_PKG_LICENSE")));
+                        ui.add_space(8.0);
+                        ui.label("New versions and release notes:");
+                        ui.hyperlink(RELEASES_URL);
+                        ui.add_space(8.0);
+                        if ui.button("OK").clicked() {
+                            keep_open = false;
+                        }
+                    });
+                }
             }
         });
         // Esc / клик мимо окна — как «Cancel» (у восстановления черновик сохраняется).
@@ -910,9 +939,14 @@ impl MarkdowntownApp {
                 }
             });
             ui.menu_button("View", |ui| self.view_menu(ui));
+            ui.menu_button("Help", |ui| {
+                if ui.button("About Markdowntown").clicked() {
+                    self.dialog = Some(Dialog::About);
+                }
+            });
             // Подпись автора справа в строке меню.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak("luna-park discoteque 2026");
+                ui.weak(format!("{AUTHOR} 2026"));
             });
         });
     }
@@ -1374,7 +1408,7 @@ mod tests {
     /// они рисуются квадратиками. Добавляя новый символ в UI, допишите его сюда.
     /// Проверяются встроенные шрифты: системные запасные (`fonts.rs`) могут
     /// отсутствовать.
-    const UI_SYMBOLS: &[char] = &['⏶', '⏷', '×', '…', '−', '“', '”', '•'];
+    const UI_SYMBOLS: &[char] = &['⏶', '⏷', '×', '…', '−', '“', '”', '•', '©'];
 
     #[test]
     fn ui_symbols_exist_in_default_fonts() {

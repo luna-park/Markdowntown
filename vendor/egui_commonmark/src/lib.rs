@@ -249,6 +249,12 @@ impl<'f> CommonMarkViewer<'f> {
         self
     }
 
+    /// Markdowntown patch: номера сносок по меткам (см. `CommonMarkOptions::footnote_numbers`).
+    pub fn footnote_numbers(mut self, numbers: &'f std::collections::HashMap<String, usize>) -> Self {
+        self.options.footnote_numbers = Some(numbers);
+        self
+    }
+
     /// Shows rendered markdown
     pub fn show(
         self,

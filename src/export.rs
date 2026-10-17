@@ -5,9 +5,10 @@
 //! варианта SVG, браузер показывает подходящий (`<picture>`). При печати — светлая.
 //! Raw HTML из документа, как и в превью, не исполняется, а выводится текстом.
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use syntect::highlighting::ThemeSet;
 use syntect::html::{ClassStyle, ClassedHTMLGenerator, css_for_theme_with_class_style};
 use syntect::parsing::SyntaxSet;
@@ -105,7 +106,13 @@ pub fn to_html(
     };
     // GFM — ради alerts (`> [!NOTE]`); в превью их распознаёт egui_commonmark.
     let options = segment::parser_options() | Options::ENABLE_GFM;
-    let mut events = exporter.transform(Parser::new_ext(text, options));
+    let events = exporter.transform(Parser::new_ext(text, options));
+    let order: Vec<String> = segment::split_all(text)
+        .footnotes
+        .into_iter()
+        .map(|f| f.label)
+        .collect();
+    let mut events = footnotes_to_end(events, &order);
     let title = add_heading_ids(&mut events).unwrap_or_else(|| fallback_title.to_owned());
 
     let mut body = String::with_capacity(text.len() * 2);
@@ -166,6 +173,11 @@ impl Exporter<'_> {
                         self.code_block(lang, &code)
                     };
                     out.push(Event::Html(html.into()));
+                }
+                // Alert: заголовок со значком, как у GitHub.
+                Event::Start(Tag::BlockQuote(Some(kind))) => {
+                    out.push(Event::Start(Tag::BlockQuote(Some(kind))));
+                    out.push(Event::Html(alert_title(kind).into()));
                 }
                 // Raw HTML не поддерживаем: показываем исходник, как в превью.
                 Event::Start(Tag::HtmlBlock) => {
@@ -291,6 +303,101 @@ impl Exporter<'_> {
 
 /// Формула — встроенный SVG. Размеры в em и цвет `currentColor`: формула следует размеру
 /// и цвету текста вокруг (в том числе теме страницы). Ошибка — исходник с подсказкой.
+/// Сноски как у GitHub (и в превью): ссылка — номер по порядку первой ссылки
+/// (`order` — метки в этом порядке, см. `segment::Split::footnotes`), определения —
+/// в конце документа нумерованным списком с обратной ссылкой «↩». Определения без
+/// ссылок не показываются.
+fn footnotes_to_end<'a>(events: Vec<Event<'a>>, order: &[String]) -> Vec<Event<'a>> {
+    let mut referenced = std::collections::HashSet::new();
+    let mut reference = |label: &str| -> Event<'a> {
+        let html = match order.iter().position(|l| l == label) {
+            Some(i) => {
+                let label = escape(label);
+                // Обратная ссылка ведёт к первой ссылке на сноску.
+                let id = if referenced.insert(label.clone()) {
+                    format!(" id=\"fnref-{label}\"")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "<sup class=\"footnote-ref\"><a href=\"#fn-{label}\"{id}>{}</a></sup>",
+                    i + 1
+                )
+            }
+            None => format!("[^{}]", escape(label)),
+        };
+        Event::InlineHtml(html.into())
+    };
+    let mut out = Vec::with_capacity(events.len());
+    let mut definitions: HashMap<String, Vec<Event<'a>>> = HashMap::new();
+    let mut events = events.into_iter();
+    while let Some(event) = events.next() {
+        match event {
+            Event::FootnoteReference(label) => out.push(reference(&label)),
+            Event::Start(Tag::FootnoteDefinition(label)) => {
+                let body = events
+                    .by_ref()
+                    .take_while(|e| !matches!(e, Event::End(TagEnd::FootnoteDefinition)))
+                    .map(|e| match e {
+                        Event::FootnoteReference(l) => reference(&l),
+                        e => e,
+                    })
+                    .collect();
+                definitions.insert(label.to_string(), body);
+            }
+            event => out.push(event),
+        }
+    }
+    let items: String = order
+        .iter()
+        .filter_map(|label| {
+            let body = definitions.remove(label)?;
+            let label = escape(label);
+            let mut html = String::new();
+            pulldown_cmark::html::push_html(&mut html, body.into_iter());
+            let back = format!(
+                " <a href=\"#fnref-{label}\" class=\"footnote-backref\" \
+                 aria-label=\"Back to reference\">↩</a>"
+            );
+            match html.rfind("</p>") {
+                Some(pos) => html.insert_str(pos, &back),
+                None => html.push_str(&back),
+            }
+            Some(format!("<li id=\"fn-{label}\">\n{html}</li>\n"))
+        })
+        .collect();
+    if !items.is_empty() {
+        out.push(Event::Html(
+            format!("<section class=\"footnotes\">\n<ol>\n{items}</ol>\n</section>\n").into(),
+        ));
+    }
+    out
+}
+
+/// Заголовок alert со значком — как в HTML у GitHub (`markdown-alert-title`); значок
+/// окрашивается цветом заголовка (`currentColor`).
+fn alert_title(kind: BlockQuoteKind) -> String {
+    let id = match kind {
+        BlockQuoteKind::Note => "NOTE",
+        BlockQuoteKind::Tip => "TIP",
+        BlockQuoteKind::Important => "IMPORTANT",
+        BlockQuoteKind::Warning => "WARNING",
+        BlockQuoteKind::Caution => "CAUTION",
+    };
+    let Some(alert) = crate::alerts::ALERTS.iter().find(|a| a.id == id) else {
+        return String::new();
+    };
+    let icon = crate::alerts::icon_svg(alert, "currentColor").replacen(
+        "<svg",
+        "<svg aria-hidden=\"true\"",
+        1,
+    );
+    format!(
+        "<p class=\"markdown-alert-title\">{icon}{}</p>\n",
+        alert.title
+    )
+}
+
 fn math_html(tex: &str, display: bool) -> String {
     let formula = match crate::math::render(tex, display, crate::math::MATH_SCALE, [0, 0, 0]) {
         Ok(f) => f,
@@ -568,18 +675,20 @@ figure.mermaid img { height: auto; }
 .math-inline svg, .math-display svg { overflow: visible; }
 .math-error { color: var(--caution); }
 dt { font-weight: 600; } dd { margin: 0 0 8px 2em; }
-.footnote-definition { font-size: .875em; color: var(--muted); }
-.footnote-definition p { display: inline; }
-.footnote-definition-label { margin-right: .4em; }
+.footnotes { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+  font-size: .85em; color: var(--muted); }
+.footnotes ol { padding-left: 1.5em; } .footnotes li { margin: .25em 0; }
+.footnotes li p { margin: 0; }
+.footnote-ref a, .footnote-backref { text-decoration: none; }
+sup { line-height: 0; }
 .markdown-alert-note, .markdown-alert-tip, .markdown-alert-important,
 .markdown-alert-warning, .markdown-alert-caution { color: inherit; border-left-color: var(--alert); }
 .markdown-alert-note { --alert: var(--note); } .markdown-alert-tip { --alert: var(--tip); }
 .markdown-alert-important { --alert: var(--important); }
 .markdown-alert-warning { --alert: var(--warning); } .markdown-alert-caution { --alert: var(--caution); }
-[class^=markdown-alert-]::before { display: block; padding-top: 8px; font-weight: 600; color: var(--alert); }
-.markdown-alert-note::before { content: "Note"; } .markdown-alert-tip::before { content: "Tip"; }
-.markdown-alert-important::before { content: "Important"; }
-.markdown-alert-warning::before { content: "Warning"; } .markdown-alert-caution::before { content: "Caution"; }
+.markdown-alert-title { display: flex; align-items: center; gap: 8px; margin: 8px 0 0;
+  font-weight: 600; line-height: 1; color: var(--alert); }
+.markdown-alert-title svg { flex: none; }
 @media print {
   .markdown-body { max-width: none; padding: 0; }
   pre, figure, table, img { break-inside: avoid; }
@@ -688,6 +797,54 @@ mod tests {
         assert!(out.html.contains("type=\"checkbox\""));
         assert!(out.html.contains("<del>old</del>"));
         assert!(out.html.contains("markdown-alert-note"));
+        assert!(out.html.contains(
+            "<p class=\"markdown-alert-title\"><svg aria-hidden=\"true\" fill=\"currentColor\""
+        ));
+        assert!(out.html.contains("</svg>Note</p>"));
+    }
+
+    #[test]
+    fn footnotes_are_numbered_and_moved_to_the_end() {
+        let out = export(
+            "B[^b], A[^a], B again[^b].
+
+[^a]: Note A.
+
+[^b]: Note B.
+
+[^x]: Unused.
+
+After.
+",
+        );
+        let html = &out.html;
+        // Номера — по порядку первой ссылки; обратная ссылка — к первой.
+        assert!(
+            html.contains(
+                "<sup class=\"footnote-ref\"><a href=\"#fn-b\" id=\"fnref-b\">1</a></sup>"
+            )
+        );
+        assert!(html.contains("<a href=\"#fn-a\" id=\"fnref-a\">2</a>"));
+        assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-b\">1</a></sup>"));
+        // Определения — в конце, по номерам, с «↩» внутри абзаца; неиспользуемое — нет.
+        let section = html.find("<section class=\"footnotes\">").unwrap();
+        assert!(html.find("After.").unwrap() < section);
+        assert!(html.find("<li id=\"fn-b\">").unwrap() < html.find("<li id=\"fn-a\">").unwrap());
+        assert!(html.contains("Note B. <a href=\"#fnref-b\" class=\"footnote-backref\""));
+        assert!(!html.contains("Unused"));
+        assert!(!html.contains("footnote-definition"));
+    }
+
+    /// Цвета alerts в превью (`alerts.rs`) — те же, что переменные CSS экспорта.
+    #[test]
+    fn alert_colors_match_css() {
+        let hex = |c: egui::Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
+        for alert in &crate::alerts::ALERTS {
+            let light = format!("--{}: {};", alert.css, hex(alert.light));
+            let dark = format!("--{}: {};", alert.css, hex(alert.dark));
+            assert!(PAGE_CSS.contains(&light), "{light}");
+            assert!(DARK_VARS.contains(&dark), "{dark}");
+        }
     }
 
     #[test]

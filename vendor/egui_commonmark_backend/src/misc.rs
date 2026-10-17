@@ -40,6 +40,9 @@ pub struct CommonMarkOptions<'f> {
     /// смещения. Хвост текста после него разбирается (например, определения сносок и
     /// ссылок, нужные блоку), но не отображается.
     pub render_until: Option<usize>,
+    /// Markdowntown patch: номера сносок по меткам (как на GitHub — по порядку первой
+    /// ссылки). Без номера показывается метка.
+    pub footnote_numbers: Option<&'f HashMap<String, usize>>,
 }
 
 impl std::fmt::Debug for CommonMarkOptions<'_> {
@@ -85,11 +88,19 @@ impl Default for CommonMarkOptions<'_> {
             html_fn: None,
             enable_scroll_to_heading: false,
             render_until: None,
+            footnote_numbers: None,
         }
     }
 }
 
 impl CommonMarkOptions<'_> {
+    /// Markdowntown patch: номер сноски для показа (или метка, если номера нет).
+    pub fn footnote_number(&self, label: &str) -> String {
+        self.footnote_numbers
+            .and_then(|numbers| numbers.get(label))
+            .map_or_else(|| label.to_owned(), usize::to_string)
+    }
+
     #[cfg(feature = "better_syntax_highlighting")]
     pub fn curr_theme(&self, ui: &Ui) -> &str {
         if ui.style().visuals.dark_mode {
