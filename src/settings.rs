@@ -49,6 +49,8 @@ pub struct Settings {
     pub view_mode: ViewMode,
     /// Панель оглавления (View → Outline).
     pub show_outline: bool,
+    /// Превью — колонкой ограниченной ширины по центру (View → Readable width).
+    pub readable_width: bool,
     pub theme: Theme,
     /// Недавние файлы, свежие первыми.
     pub recent_files: Vec<PathBuf>,
@@ -69,6 +71,7 @@ impl Default for Settings {
             editor_ratio: 0.5,
             view_mode: ViewMode::default(),
             show_outline: false,
+            readable_width: true,
             theme: Theme::default(),
             recent_files: Vec::new(),
             session: Vec::new(),
@@ -129,6 +132,7 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{ "editor_font_size": 18.0 }"#).unwrap();
         assert_eq!(s.editor_font_size, 18.0);
         assert!(s.sync_scroll);
+        assert!(s.readable_width);
         assert_eq!(s.view_mode, ViewMode::Both);
     }
 }

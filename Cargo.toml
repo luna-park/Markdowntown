@@ -51,7 +51,17 @@ egui_commonmark = { path = "vendor/egui_commonmark" }
 winresource = "0.1.34"
 
 # Ассоциация с .md: реестр HKCU (winreg), уведомление Проводника (SHChangeNotify);
-# открытие файлов и адресов (ms-settings:) обработчиком Windows (ShellExecuteW).
+# открытие файлов и адресов (ms-settings:) обработчиком Windows (ShellExecuteW);
+# один экземпляр — именованный канал (Pipes и то, что нужно его функциям).
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Окно программы (HWND) — вывести на передний план; та же версия, что у eframe.
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = [
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 winreg = "0.56.0"

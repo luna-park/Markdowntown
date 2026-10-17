@@ -8,6 +8,7 @@ use crate::fonts;
 use crate::links::{self, Target};
 use crate::recovery::{Draft, Drafts};
 use crate::settings::{self, Settings, Theme, ViewMode};
+use crate::single_instance::Inbox;
 use crate::tab::{DiskEvent, Tab};
 
 const WELCOME: &str = r#"# Markdowntown
@@ -158,15 +159,26 @@ pub struct MarkdowntownApp {
     /// Заголовок окна, уже отправленный в окно. Каждая команда окна — это ещё и запрос
     /// перерисовки: отправка заголовка в каждом кадре рисовала кадры без остановки.
     window_title: String,
+    /// Вкладка, к которой строка вкладок уже прокручена (см. `tab_bar`).
+    tab_bar_revealed: Option<u64>,
 
     drafts: Option<Drafts>,
     /// Идущий экспорт в HTML: итог (сообщение для статуса) придёт из фонового потока.
     export: Option<mpsc::Receiver<String>>,
+    /// Файлы, открытые из Проводника, пока программа уже запущена.
+    inbox: Inbox,
 }
 
 impl MarkdowntownApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, data_dir: Option<PathBuf>) -> Self {
+    /// `files` — из командной строки; `inbox` — файлы от следующих запусков программы.
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        data_dir: Option<PathBuf>,
+        files: &[PathBuf],
+        inbox: Inbox,
+    ) -> Self {
         let ctx = &cc.egui_ctx;
+        inbox.attach(cc);
         // Графика инициализирована — дальше сбои уже не в драйвере при запуске.
         log::info!("graphics initialized, starting UI");
         crate::style::apply_global(ctx);
@@ -198,12 +210,14 @@ impl MarkdowntownApp {
             exiting: false,
             exit_discarded: Vec::new(),
             window_title: String::new(),
+            tab_bar_revealed: None,
             drafts,
             export: None,
+            inbox,
         };
         app.restore_session();
-        if let Some(path) = std::env::args_os().nth(1) {
-            app.open_path(Path::new(&path));
+        for path in files {
+            app.open_path(path);
         }
         if app.tabs.is_empty() {
             // Первый запуск или пустой сеанс — приветствие.
@@ -787,6 +801,16 @@ impl MarkdowntownApp {
         }
     }
 
+    /// Файлы, открытые из Проводника при запущенной программе, — вкладками в этом окне
+    /// (окно на передний план выводит `single_instance`).
+    fn handle_inbox(&mut self) {
+        while let Some(files) = self.inbox.try_recv() {
+            for path in files {
+                self.request(Action::Open(Some(path)));
+            }
+        }
+    }
+
     /// Файлы, перетащенные в окно, открываются; пока их несут — подсказка поверх окна.
     fn handle_drop(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -958,6 +982,8 @@ impl MarkdowntownApp {
         ui.separator();
         ui.checkbox(&mut s.show_outline, "Outline (Ctrl+Shift+O)");
         ui.checkbox(&mut s.sync_scroll, "Synchronized scrolling");
+        ui.checkbox(&mut s.readable_width, "Readable width")
+            .on_hover_text("Preview text in a centered column of comfortable line length");
         ui.separator();
 
         ui.menu_button("Theme", |ui| {
@@ -1017,6 +1043,14 @@ impl MarkdowntownApp {
         let mut activate = None;
         let mut close = None;
         let count = self.tabs.len();
+        // Активная вкладка сменилась (Ctrl+Tab, открытие файла) — прокрутить к ней.
+        let active_id = self.tabs[self.active].id;
+        let reveal_active = self.tab_bar_revealed != Some(active_id);
+        self.tab_bar_revealed = Some(active_id);
+        // Полоса прокрутки под вкладками, а не поверх них (по умолчанию в egui она
+        // плавающая и перекрывает вкладки); колесо мыши прокручивает вкладки вбок.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        ui.style_mut().always_scroll_the_only_direction = true;
         egui::ScrollArea::horizontal()
             .id_salt("tab_bar")
             .show(ui, |ui| {
@@ -1034,6 +1068,9 @@ impl MarkdowntownApp {
                         let response = ui
                             .add(egui::Button::selectable(i == self.active, name))
                             .on_hover_text(hover);
+                        if reveal_active && i == self.active {
+                            response.scroll_to_me(None);
+                        }
                         if response.clicked() {
                             activate = Some(i);
                         }
@@ -1130,6 +1167,7 @@ impl MarkdowntownApp {
         let tab = &mut self.tabs[self.active];
         tab.editor.font_size = self.settings.editor_font_size;
         tab.scroll_sync.enabled = self.settings.sync_scroll;
+        tab.preview.readable_width = self.settings.readable_width;
         let id = tab.id;
         let diagrams = &mut self.diagrams;
         // Id элементов вкладки (прокрутка, таблицы, окна) — свои у каждой вкладки.
@@ -1244,6 +1282,7 @@ impl eframe::App for MarkdowntownApp {
             self.handle_shortcuts(&ctx);
         }
         self.handle_drop(&ctx);
+        self.handle_inbox();
 
         if self.installed_editor_font != self.settings.editor_font {
             fonts::install(&ctx, self.settings.editor_font.as_deref());

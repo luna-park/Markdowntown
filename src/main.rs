@@ -19,9 +19,12 @@ mod recovery;
 mod scroll_sync;
 mod segment;
 mod settings;
+mod single_instance;
 mod style;
 mod tab;
 mod viewer;
+
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod assets_tests;
@@ -42,6 +45,25 @@ fn window_icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let data_dir = data_dir::resolve();
+    // Файлы из командной строки (Проводник передаёт один). Абсолютные — их может
+    // открыть уже запущенный экземпляр с другой текущей папкой.
+    let files: Vec<PathBuf> = std::env::args_os()
+        .skip(1)
+        .map(|arg| std::path::absolute(&arg).unwrap_or_else(|_| arg.into()))
+        .collect();
+    // До журнала: процесс, передавший файлы запущенному окну, не должен затирать его журнал.
+    let instance_key = data_dir.clone().or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_owned))
+    });
+    let inbox = match instance_key {
+        Some(key) => match single_instance::start(&key, &files) {
+            single_instance::Startup::Forwarded => return Ok(()),
+            single_instance::Startup::Primary(inbox) => inbox,
+        },
+        None => single_instance::Inbox::none(),
+    };
     let log_file = logging::init(data_dir.as_deref());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -61,7 +83,11 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "Markdowntown",
         options,
-        Box::new(move |cc| Ok(Box::new(app::MarkdowntownApp::new(cc, data_dir)))),
+        Box::new(move |cc| {
+            Ok(Box::new(app::MarkdowntownApp::new(
+                cc, data_dir, &files, inbox,
+            )))
+        }),
     );
     if let Err(e) = &result {
         // У release-сборки нет консоли: без окна с сообщением запуск просто «не происходит».

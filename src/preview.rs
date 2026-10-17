@@ -22,6 +22,11 @@ const DIAGRAM_DEBOUNCE: Duration = Duration::from_millis(500);
 /// Размер основного текста превью, pt. Заголовки считаются от него в `egui_commonmark`.
 const PREVIEW_BODY_SIZE: f32 = 14.0;
 
+/// Ширина колонки превью при View → Readable width, pt: 50 em — ~85–90 символов в строке
+/// (удобная для чтения длина строки — 45–90 символов). В pt — масштабируется вместе
+/// с текстом (Ctrl+колесо), длина строки не меняется.
+const READABLE_WIDTH: f32 = 50.0 * PREVIEW_BODY_SIZE;
+
 /// Шрифты и цвета превью: размеры — от `PREVIEW_BODY_SIZE` (код чуть мельче, как на
 /// GitHub), цвета текста — для чтения (см. [`style::apply_reading_colors`]).
 fn apply_preview_style(ui: &mut egui::Ui) {
@@ -41,6 +46,8 @@ fn apply_preview_style(ui: &mut egui::Ui) {
 
 #[derive(Default)]
 pub struct Preview {
+    /// Колонка по центру шириной не больше [`READABLE_WIDTH`] (View → Readable width).
+    pub readable_width: bool,
     md_cache: CommonMarkCache,
     /// Версия документа, для которой посчитаны `segments`.
     version: Option<(u64, u64)>,
@@ -125,97 +132,109 @@ impl Preview {
             self.heights.clear();
         }
 
+        let max_width = if self.readable_width {
+            READABLE_WIDTH
+        } else {
+            f32::INFINITY
+        };
+        // Колонка — внутри области прокрутки: полоса прокрутки остаётся у края панели,
+        // колесо мыши работает и над полями по бокам.
         let output = scroll.show_viewport(ui, |ui, viewport| {
-            let content_top = ui.min_rect().top();
-            let width = ui.available_width();
-            let item_spacing = ui.spacing().item_spacing.y;
-            for (i, seg) in self.segments.iter().enumerate() {
-                let top = ui.cursor().top() - content_top;
-                anchors.push((seg.range.start, top));
-                match &seg.kind {
-                    SegmentKind::Markdown { appendix } => {
-                        let block = &doc.text[seg.range.clone()];
-                        let key = block_key(block, appendix, width, scale_bits);
-                        if let Some(&BlockHeight {
-                            height,
-                            stable: true,
-                            ..
-                        }) = self.heights.get(&key)
-                            && (top + height < viewport.min.y || top > viewport.max.y)
-                        {
-                            // Невидимый блок: занять его место, не раскладывая текст.
-                            ui.allocate_space(egui::vec2(width, (height - item_spacing).max(0.0)));
-                            continue;
+            centered_column(ui, max_width, |ui| {
+                let content_top = ui.min_rect().top();
+                let width = ui.available_width();
+                let item_spacing = ui.spacing().item_spacing.y;
+                for (i, seg) in self.segments.iter().enumerate() {
+                    let top = ui.cursor().top() - content_top;
+                    anchors.push((seg.range.start, top));
+                    match &seg.kind {
+                        SegmentKind::Markdown { appendix } => {
+                            let block = &doc.text[seg.range.clone()];
+                            let key = block_key(block, appendix, width, scale_bits);
+                            if let Some(&BlockHeight {
+                                height,
+                                stable: true,
+                                ..
+                            }) = self.heights.get(&key)
+                                && (top + height < viewport.min.y || top > viewport.max.y)
+                            {
+                                // Невидимый блок: занять его место, не раскладывая текст.
+                                ui.allocate_space(egui::vec2(
+                                    width,
+                                    (height - item_spacing).max(0.0),
+                                ));
+                                continue;
+                            }
+                            // Блок рисуется в дочерней области ровно по ширине панели и занимает
+                            // в превью ровно эту ширину: если что-то в нём окажется шире,
+                            // оно обрежется по краю, а не растянет (через `max_rect`) все
+                            // следующие блоки.
+                            let block_rect = egui::Rect::from_min_size(
+                                ui.cursor().min,
+                                egui::vec2(width, f32::INFINITY),
+                            );
+                            let mut block_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .id_salt(i)
+                                    .max_rect(block_rect)
+                                    .layout(*ui.layout()),
+                            );
+                            let edited = show_markdown(
+                                &mut block_ui,
+                                &mut self.md_cache,
+                                &math_fn,
+                                image_base.as_deref(),
+                                doc,
+                                seg,
+                                appendix,
+                            );
+                            let used = egui::Rect::from_min_size(
+                                block_rect.min,
+                                egui::vec2(width, block_ui.min_rect().height()),
+                            );
+                            ui.advance_cursor_after_rect(used);
+                            if edited {
+                                // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
+                                ctx.request_repaint();
+                                break;
+                            }
+                            ui.add_space(block_gap);
+                            let height = ui.cursor().top() - content_top - top;
+                            let frame = self.frame;
+                            let entry = self.heights.entry(key).or_insert(BlockHeight {
+                                height,
+                                frame,
+                                stable: false,
+                            });
+                            if entry.frame != frame {
+                                entry.stable = (entry.height - height).abs() < 0.5;
+                                entry.height = height;
+                                entry.frame = frame;
+                            }
                         }
-                        // Блок рисуется в дочерней области ровно по ширине панели и занимает
-                        // в превью ровно эту ширину: если что-то в нём окажется шире,
-                        // оно обрежется по краю, а не растянет (через `max_rect`) все
-                        // следующие блоки.
-                        let block_rect = egui::Rect::from_min_size(
-                            ui.cursor().min,
-                            egui::vec2(width, f32::INFINITY),
-                        );
-                        let mut block_ui = ui.new_child(
-                            egui::UiBuilder::new()
-                                .id_salt(i)
-                                .max_rect(block_rect)
-                                .layout(*ui.layout()),
-                        );
-                        let edited = show_markdown(
-                            &mut block_ui,
-                            &mut self.md_cache,
-                            &math_fn,
-                            image_base.as_deref(),
-                            doc,
-                            seg,
-                            appendix,
-                        );
-                        let used = egui::Rect::from_min_size(
-                            block_rect.min,
-                            egui::vec2(width, block_ui.min_rect().height()),
-                        );
-                        ui.advance_cursor_after_rect(used);
-                        if edited {
-                            // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
-                            ctx.request_repaint();
-                            break;
+                        SegmentKind::Mermaid { source } => {
+                            if self.shown.len() <= mermaid_index {
+                                self.shown.resize(mermaid_index + 1, None);
+                            }
+                            let clicked = ui
+                                .push_id(i, |ui| {
+                                    show_mermaid(
+                                        ui,
+                                        diagrams,
+                                        &mut self.shown[mermaid_index],
+                                        source,
+                                        &diagram_params,
+                                    )
+                                })
+                                .inner;
+                            if clicked {
+                                self.viewer = Some(DiagramViewer::new(source));
+                            }
+                            mermaid_index += 1;
                         }
-                        ui.add_space(block_gap);
-                        let height = ui.cursor().top() - content_top - top;
-                        let frame = self.frame;
-                        let entry = self.heights.entry(key).or_insert(BlockHeight {
-                            height,
-                            frame,
-                            stable: false,
-                        });
-                        if entry.frame != frame {
-                            entry.stable = (entry.height - height).abs() < 0.5;
-                            entry.height = height;
-                            entry.frame = frame;
-                        }
-                    }
-                    SegmentKind::Mermaid { source } => {
-                        if self.shown.len() <= mermaid_index {
-                            self.shown.resize(mermaid_index + 1, None);
-                        }
-                        let clicked = ui
-                            .push_id(i, |ui| {
-                                show_mermaid(
-                                    ui,
-                                    diagrams,
-                                    &mut self.shown[mermaid_index],
-                                    source,
-                                    &diagram_params,
-                                )
-                            })
-                            .inner;
-                        if clicked {
-                            self.viewer = Some(DiagramViewer::new(source));
-                        }
-                        mermaid_index += 1;
                     }
                 }
-            }
+            })
         });
 
         if let Some(viewer) = &mut self.viewer
@@ -234,6 +253,44 @@ impl Preview {
             content_height: output.content_size.y,
         }
     }
+}
+
+/// Колонка по центру `ui` шириной не больше `max_width`.
+fn centered_column<R>(
+    ui: &mut egui::Ui,
+    max_width: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let full = ui.available_width();
+    let width = full.min(max_width);
+    // Целые точки: дробный сдвиг размыл бы текст.
+    let left = ui.cursor().left() + ((full - width) / 2.0).floor();
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(left, ui.cursor().top()),
+        egui::vec2(width, f32::INFINITY),
+    );
+    // Границы колонки — едва заметный пунктир чуть снаружи, во всю видимую высоту
+    // (неподвижен при прокрутке, как направляющая).
+    const GUIDE_GAP: f32 = 16.0;
+    if left - ui.cursor().left() > GUIDE_GAP * 2.0 {
+        let visible = ui.clip_rect();
+        let stroke = egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.3));
+        for x in [left - GUIDE_GAP, left + width + GUIDE_GAP] {
+            // По центру пикселя (с учётом масштаба экрана) — линия без размытия.
+            let x = ui.painter().round_to_pixel_center(x);
+            ui.painter().extend(egui::Shape::dashed_line(
+                &[
+                    egui::pos2(x, visible.top()),
+                    egui::pos2(x, visible.bottom()),
+                ],
+                stroke,
+                3.0,
+                5.0,
+            ));
+        }
+    }
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), add)
+        .inner
 }
 
 /// Запомненная высота блока. Пропускать блок можно, только когда высота подтверждена

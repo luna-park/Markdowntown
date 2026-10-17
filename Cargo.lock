@@ -2404,6 +2404,7 @@ dependencies = [
  "ratex-parser",
  "ratex-svg",
  "ratex-types",
+ "raw-window-handle",
  "resvg",
  "rfd",
  "serde",
