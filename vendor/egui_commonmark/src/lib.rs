@@ -332,26 +332,43 @@ impl<'f> CommonMarkViewer<'f> {
     }
 }
 
+/// Markdowntown patch: закончить строку раскладки с переносом, если на ней уже что-то есть;
+/// следующая строка — ниже на `gap`.
+pub(crate) fn break_row(ui: &mut egui::Ui, gap: f32) {
+    if ui.cursor().left() > ui.max_rect().left() {
+        let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.y, gap);
+        ui.end_row();
+        ui.spacing_mut().item_spacing.y = spacing;
+    }
+}
+
 pub(crate) struct ListLevel {
     current_number: Option<u64>,
+    /// Markdowntown patch: свободный список (пункты — абзацами): пункты разделены отступом.
+    loose: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct List {
     items: Vec<ListLevel>,
     has_list_begun: bool,
+    /// Markdowntown patch: предыдущий пункт кончился абзацем свободного списка или блоком
+    /// (код, таблица, цитата) — у них на GitHub отступ снизу.
+    gap_before_next_item: bool,
 }
 
 impl List {
     pub fn start_level_with_number(&mut self, start_number: u64) {
         self.items.push(ListLevel {
             current_number: Some(start_number),
+            loose: false,
         });
     }
 
     pub fn start_level_without_number(&mut self) {
         self.items.push(ListLevel {
             current_number: None,
+            loose: false,
         });
     }
 
@@ -363,10 +380,28 @@ impl List {
         self.items.len() == 1
     }
 
-    pub fn start_item(&mut self, ui: &mut egui::Ui, options: &CommonMarkOptions) {
+    /// Markdowntown patch: `has_paragraph` — в пункте есть абзацы (список свободный),
+    /// `gap` — отступ перед пунктом такого списка. Возвращает, свободный ли список.
+    pub fn start_item(
+        &mut self,
+        ui: &mut egui::Ui,
+        options: &CommonMarkOptions,
+        has_paragraph: bool,
+        gap: f32,
+    ) -> bool {
+        let Some(level) = self.items.last_mut() else {
+            unreachable!();
+        };
+        level.loose |= has_paragraph;
+        let loose = level.loose;
+
         // To ensure that newlines are only inserted within the list and not before it
         if self.has_list_begun {
-            newline(ui);
+            if loose || self.gap_before_next_item {
+                break_row(ui, gap);
+            } else {
+                newline(ui);
+            }
         } else {
             self.has_list_begun = true;
         }
@@ -388,6 +423,12 @@ impl List {
         }
 
         ui.add_space(4.0);
+        loose
+    }
+
+    /// Markdowntown patch: нужен ли отступ перед следующим пунктом (см. `gap_before_next_item`).
+    pub fn end_item(&mut self, gap_after: bool) {
+        self.gap_before_next_item = gap_after;
     }
 
     pub fn end_level(&mut self, ui: &mut egui::Ui, insert_newline: bool) {

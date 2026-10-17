@@ -97,6 +97,27 @@ Code block without a language.
 | long cell | **bold** | 22 |
 | `code` | кириллица | 333 |
 
+Blocks inside list items (spacing as on GitHub):
+
+1. First paragraph of the item.
+
+   Second paragraph of the same item.
+
+   ```
+   code inside the item
+   ```
+
+   > A quote inside the item.
+2. Options to check:
+
+   | Group | Option | Value |
+   | --- | --- | --- |
+   | Remove Tracks | Except Bone Transform | yes |
+   | Bone Renamer | Unique Node (Make Unique) | yes, skeleton name `GeneralSkeleton` |
+
+   Text after the table in the same item.
+2. Next item.
+
 ## Horizontal rule
 
 Above the rule.

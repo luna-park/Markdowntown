@@ -5,7 +5,7 @@ use crate::{CommonMarkCache, CommonMarkOptions};
 
 use egui::{self, Id, Pos2, TextStyle, Ui};
 
-use crate::List;
+use crate::{List, break_row};
 use egui_commonmark_backend::elements::*;
 use egui_commonmark_backend::misc::*;
 use egui_commonmark_backend::pulldown::*;
@@ -59,6 +59,86 @@ impl Newline {
             newline(ui);
         }
     }
+}
+
+/// Markdowntown patch: роль события на верхнем уровне пункта списка.
+#[derive(Clone, Copy)]
+enum ItemPart {
+    /// Блок целиком: таблица и цитата (`process_event` забирает их события), линия.
+    Block,
+    /// Начало блока, события которого идут следом: абзац, заголовок, код.
+    BlockStart,
+    BlockEnd,
+    /// Текст тесного списка (без абзаца).
+    Inline,
+    /// Внутри блока, служебные события, вложенный список.
+    Other,
+}
+
+fn item_part(event: &pulldown_cmark::Event, in_block: bool) -> ItemPart {
+    use pulldown_cmark::{Event, Tag, TagEnd};
+    match event {
+        Event::Start(Tag::Table(_) | Tag::BlockQuote(_)) | Event::Rule => ItemPart::Block,
+        Event::Start(
+            Tag::Paragraph
+            | Tag::Heading { .. }
+            | Tag::CodeBlock(_)
+            | Tag::HtmlBlock
+            | Tag::DefinitionList,
+        ) => ItemPart::BlockStart,
+        Event::End(
+            TagEnd::Paragraph
+            | TagEnd::Heading(_)
+            | TagEnd::CodeBlock
+            | TagEnd::HtmlBlock
+            | TagEnd::DefinitionList,
+        ) => ItemPart::BlockEnd,
+        _ if in_block => ItemPart::Other,
+        Event::Start(Tag::List(_)) | Event::End(_) | Event::TaskListMarker(_) => ItemPart::Other,
+        _ => ItemPart::Inline,
+    }
+}
+
+/// Markdowntown patch: блок в пункте списка — в своей области от верха строки, с той же
+/// раскладкой, что у документа. Раскладка пункта (`horizontal_wrapped`) центрирует виджет
+/// по высоте строки, и после `break_row` (строка нулевой высоты) блок вылезал вверх.
+fn top_aligned<R>(ui: &mut Ui, enabled: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+    if !enabled {
+        return add(ui);
+    }
+    // Не `available_rect_before_wrap`: в строке с выравниванием по центру он начинается
+    // выше курсора на половину минимальной высоты строки.
+    let top_left = ui.cursor().min;
+    let max_rect = ui.max_rect();
+    let rect = egui::Rect::from_min_max(
+        top_left,
+        egui::pos2(max_rect.right(), max_rect.bottom().max(top_left.y)),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(ui.next_auto_id())
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::BOTTOM).with_main_wrap(true)),
+    );
+    let inner = add(&mut child);
+    ui.advance_cursor_after_rect(child.min_rect());
+    inner
+}
+
+/// Markdowntown patch: есть ли в пункте абзацы верхнего уровня — признак свободного списка.
+fn has_top_level_paragraph(events: &[(pulldown_cmark::Event, Range<usize>)]) -> bool {
+    let mut depth = 0usize;
+    for (event, _) in events {
+        match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Paragraph) if depth == 0 => {
+                return true;
+            }
+            pulldown_cmark::Event::Start(_) => depth += 1,
+            pulldown_cmark::Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
 }
 
 #[derive(Default)]
@@ -400,12 +480,39 @@ impl CommonMarkViewerInternal {
             self.is_list_item = false;
 
             let item_events = delayed_events_list_item(events);
+            // Markdowntown patch: отступы между блоками пункта и между пунктами — как на
+            // GitHub (1em = отступ между блоками превью). Внутри пункта переводы строк между
+            // блоками отключены, и в оригинале абзацы склеивались в одну строку, а код
+            // и таблицы вставали в конец строки текста.
+            let gap = ui.text_style_height(&TextStyle::Body);
+            let has_paragraph = has_top_level_paragraph(&item_events);
+            let loose = self.list.start_item(ui, options, has_paragraph, gap);
             let mut events_iter = item_events.into_iter().enumerate().peekable();
+            // Что было последним на верхнем уровне пункта: `Some(true)` — блок (у него
+            // на GitHub отступ снизу), `Some(false)` — текст тесного списка.
+            let mut last_block: Option<bool> = None;
 
             // Required to ensure that the content of the list item is aligned with
             // the * or - when wrapping
             ui.horizontal_wrapped(|ui| {
+                // Код и таблицы — по ширине пункта, а не всей панели.
+                let max_width = max_width.min(ui.max_rect().width());
+                let mut in_block = false;
                 while let Some((_, (e, src_span))) = events_iter.next() {
+                    let part = item_part(&e, in_block);
+                    let starts_content = match part {
+                        ItemPart::Block | ItemPart::BlockStart => true,
+                        ItemPart::Inline => last_block == Some(true),
+                        ItemPart::BlockEnd | ItemPart::Other => false,
+                    };
+                    if starts_content && let Some(after_block) = last_block {
+                        let row_gap = if loose || after_block {
+                            gap
+                        } else {
+                            ui.spacing().item_spacing.y
+                        };
+                        break_row(ui, row_gap);
+                    }
                     self.process_event(
                         ui,
                         &mut events_iter,
@@ -415,8 +522,18 @@ impl CommonMarkViewerInternal {
                         options,
                         max_width,
                     );
+                    match part {
+                        ItemPart::BlockStart => in_block = true,
+                        ItemPart::Block | ItemPart::BlockEnd => {
+                            in_block = false;
+                            last_block = Some(true);
+                        }
+                        ItemPart::Inline => last_block = Some(false),
+                        ItemPart::Other => {}
+                    }
                 }
             });
+            self.list.end_item(loose || last_block == Some(true));
         }
     }
 
@@ -441,18 +558,27 @@ impl CommonMarkViewerInternal {
             // and the start so when this is the first element in the markdown the newline must be
             // manually enabled
             self.line.should_not_start_newline_forced = false;
-            if let Some(alert) = parse_alerts(&options.alerts, &mut collected_events) {
-                egui_commonmark_backend::alert_ui(alert, ui, |ui| {
-                    self.process_events(ui, collected_events, cache, options, max_width);
-                })
-            } else {
-                blockquote(ui, ui.visuals().weak_text_color(), |ui| {
-                    // Вложенная цитата не должна снимать признак цитаты с текста внешней.
-                    let was_quote = std::mem::replace(&mut self.text_style.quote, true);
-                    self.process_events(ui, collected_events, cache, options, max_width);
-                    self.text_style.quote = was_quote;
-                });
-            }
+            let alert = parse_alerts(&options.alerts, &mut collected_events);
+            // Внутри пункта списка переводы строк между блоками отключены — в цитате они
+            // нужны, как вне списка: без них полоса цитаты короче строки текста.
+            let start = std::mem::replace(&mut self.line.should_start_newline, true);
+            let end = std::mem::replace(&mut self.line.should_end_newline, true);
+            top_aligned(ui, self.list.is_inside_a_list(), |ui| {
+                if let Some(alert) = alert {
+                    egui_commonmark_backend::alert_ui(alert, ui, |ui| {
+                        self.process_events(ui, collected_events, cache, options, max_width);
+                    })
+                } else {
+                    blockquote(ui, ui.visuals().weak_text_color(), |ui| {
+                        // Вложенная цитата не должна снимать признак цитаты с текста внешней.
+                        let was_quote = std::mem::replace(&mut self.text_style.quote, true);
+                        self.process_events(ui, collected_events, cache, options, max_width);
+                        self.text_style.quote = was_quote;
+                    });
+                }
+            });
+            self.line.should_start_newline = start;
+            self.line.should_end_newline = end;
 
             if events.peek().is_none() {
                 self.line.should_end_newline_forced = false;
@@ -487,6 +613,9 @@ impl CommonMarkViewerInternal {
     ) {
         if self.is_table {
             self.line.try_insert_start(ui);
+            // Markdowntown patch: таблица — с новой строки, даже если перевод строки
+            // отключён (иначе она вставала в конец строки текста и сжималась в остаток).
+            break_row(ui, ui.spacing().item_spacing.y);
 
             let id = ui.id().with("_table").with(self.curr_table);
             self.curr_table += 1;
@@ -528,7 +657,8 @@ impl CommonMarkViewerInternal {
             let widths = column_widths(&min, &max, available);
             let total: f32 = widths.iter().sum();
 
-            egui::ScrollArea::horizontal()
+            let in_list = self.list.is_inside_a_list();
+            top_aligned(ui, in_list, |ui| egui::ScrollArea::horizontal()
                 .id_salt(id.with("_scroll"))
                 .auto_shrink([true, true])
                 .show(ui, |ui| {
@@ -644,7 +774,7 @@ impl CommonMarkViewerInternal {
                             painter.vline(x, top..=bottom, stroke);
                         }
                     }));
-                });
+                }));
 
             self.is_table = false;
             if events.peek().is_none() {
@@ -711,6 +841,10 @@ impl CommonMarkViewerInternal {
                 } else {
                     ui.add(ImmutableCheckbox::without_text(&mut checkbox));
                 }
+                // Markdowntown patch: пробел между флажком и текстом — без него слипались.
+                let font = TextStyle::Body.resolve(ui.style());
+                let space = ui.fonts_mut(|f| f.glyph_width(&font, ' '));
+                ui.add_space(space);
             }
             pulldown_cmark::Event::InlineMath(tex) => {
                 if let Some(math_fn) = options.math_fn {
@@ -813,8 +947,9 @@ impl CommonMarkViewerInternal {
             }
 
             pulldown_cmark::Tag::Item => {
+                // Markdowntown patch: маркер пункта рисует `item_list_wrapping` — отступ
+                // перед пунктом зависит от его содержимого.
                 self.is_list_item = true;
-                self.list.start_item(ui, options);
             }
 
             pulldown_cmark::Tag::FootnoteDefinition(note) => {
@@ -965,7 +1100,9 @@ impl CommonMarkViewerInternal {
         max_width: f32,
     ) {
         if let Some(block) = self.code_block.take() {
-            block.end(ui, cache, options, max_width);
+            top_aligned(ui, self.list.is_inside_a_list(), |ui| {
+                block.end(ui, cache, options, max_width)
+            });
             self.line.try_insert_end(ui);
         }
     }
