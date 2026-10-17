@@ -31,6 +31,13 @@ mod assets_tests;
 #[cfg(test)]
 mod perf_tests;
 
+/// Языки блоков кода (как в ```` ```lang ````), подсветка которых готовится при запуске.
+/// Остальные компилируются при первой встрече, один раз за запуск.
+const WARM_UP_LANGUAGES: &[&str] = &[
+    "rust", "python", "bash", "sh", "bat", "cmd", "js", "json", "yaml", "c", "cpp", "cs", "java",
+    "go", "html", "xml", "css", "sql", "lua", "diff", "ini", "md",
+];
+
 /// Иконка окна (заголовок, Alt+Tab). Иконка самого exe — в ресурсах (`build.rs`).
 fn window_icon() -> egui::IconData {
     let image = image::load_from_memory(include_bytes!("../assets/icon-256.png"))
@@ -65,6 +72,9 @@ fn main() -> eframe::Result {
         None => single_instance::Inbox::none(),
     };
     let log_file = logging::init(data_dir.as_deref());
+    // Пока создаются окно и графика — подсветка частых языков блоков кода (иначе первый
+    // блок каждого языка задерживает кадр на ~30 мс).
+    egui_commonmark::warm_up_highlighting(WARM_UP_LANGUAGES.iter().map(|&s| s.to_owned()));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(app::APP_TITLE)

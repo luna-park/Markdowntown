@@ -89,6 +89,11 @@ pub use egui_commonmark_backend::misc::CommonMarkCache;
 #[cfg(feature = "better_syntax_highlighting")]
 pub use egui_commonmark_backend::syntect;
 
+/// Markdowntown patch: подсветка языков заранее, в фоне (см. `misc::warm_up_highlighting`).
+#[cfg(feature = "better_syntax_highlighting")]
+#[doc(hidden)]
+pub use egui_commonmark_backend::misc::warm_up_highlighting;
+
 #[cfg(feature = "macros")]
 pub use egui_commonmark_macros::*;
 

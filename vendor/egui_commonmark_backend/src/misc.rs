@@ -367,6 +367,8 @@ impl CodeBlock {
         }
     }
 
+    /// Markdowntown patch: с кэшем. `TextEdit` блока кода вызывает раскладку каждый кадр,
+    /// и syntect заново разбирал видимые блоки в каждом кадре (~2.5 мс на 40 строк Rust).
     fn syntax_highlighting(
         &self,
         cache: &CommonMarkCache,
@@ -375,7 +377,35 @@ impl CodeBlock {
         ui: &Ui,
         text: &str,
     ) -> egui::text::LayoutJob {
-        if let Some(syntax) = cache.ps.find_syntax_by_extension(extension) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (extension, text, options.curr_theme(ui)).hash(&mut hasher);
+        TextStyle::Monospace.resolve(ui.style()).hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some(job) = cache.highlighted.borrow().get(&key) {
+            return job.clone();
+        }
+        let job = self.syntax_highlighting_uncached(cache, options, extension, ui, text);
+        let mut highlighted = cache.highlighted.borrow_mut();
+        if highlighted.len() >= HIGHLIGHT_CACHE_LIMIT {
+            highlighted.clear();
+        }
+        highlighted.insert(key, job.clone());
+        job
+    }
+
+    fn syntax_highlighting_uncached(
+        &self,
+        cache: &CommonMarkCache,
+        options: &CommonMarkOptions,
+        extension: &str,
+        ui: &Ui,
+        text: &str,
+    ) -> egui::text::LayoutJob {
+        // Markdowntown patch: по расширению или имени без учёта регистра (`rust`, `python`).
+        // Только по расширению `rust` не находился, и блок подсвечивал `egui_extras` —
+        // своим набором синтаксисов (без прогрева, ~30 мс на язык) и другими цветами.
+        if let Some(syntax) = cache.ps.find_syntax_by_token(extension) {
             let mut job = egui::text::LayoutJob::default();
             let mut h = HighlightLines::new(syntax, cache.curr_theme(ui, options));
 
@@ -438,13 +468,96 @@ fn default_theme(ui: &Ui) -> &str {
     }
 }
 
+/// Markdowntown patch: один набор синтаксисов на программу. syntect компилирует регулярные
+/// выражения языка при первой подсветке (~30 мс на язык), а результат хранится в наборе:
+/// у каждого `CommonMarkCache` (у нас — у каждой вкладки) был свой набор, и первый блок
+/// кода каждого языка тормозил в каждой вкладке заново.
+#[cfg(feature = "better_syntax_highlighting")]
+static SYNTAX_SET: std::sync::LazyLock<std::sync::Arc<SyntaxSet>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(SyntaxSet::load_defaults_newlines()));
+
+/// Markdowntown patch: больше подсвеченных блоков в кэше — кэш очищается целиком
+/// (при правке блока старые версии копятся).
+#[cfg(feature = "better_syntax_highlighting")]
+const HIGHLIGHT_CACHE_LIMIT: usize = 512;
+
+/// Образец для `warm_up_highlighting`: частые конструкции C-подобных языков, Rust, Python,
+/// shell, JS и разметки.
+#[cfg(feature = "better_syntax_highlighting")]
+const WARM_UP_SAMPLE: &str = r#"use std::collections::HashMap; import os, sys
+#[derive(Debug)] #include <stdio.h> @decorator
+pub struct Point<T> { x: T, y: f64 } class A(B): pass
+impl<'a> Trait for &'a mut Point<i32> where T: Clone { }
+fn main() -> Result<(), String> { let mut v = vec![1, 2_000, 0x1F, 3.5e-2]; }
+def f(a, *args, **kw): return f"{a!r} {kw}" if a else None
+const int n = sizeof(x); static void g(char *s) { printf("%d\n", n); }
+let s = `t ${a}`; const o = { k: [1, 'q'], f: (x) => x * 2 }; async function h() {}
+if [ -f "$HOME/x" ]; then echo $(ls -la | grep foo) && exit 1; fi
+set VAR=%PATH% & rem comment & echo off :: label
+<div class="a" id='b'>&amp; <!-- c --></div> SELECT * FROM t WHERE id = 1;
+// line comment /* block */ # hash -- dash ; semi ''' doc ''' """ doc """
+match x { Some(v) if v > 0 => println!("{v}"), _ => {} } loop { break 'outer; }
+for (int i = 0; i < 10; i++) { switch (i) { case 1: break; default: continue; } }
+try: x = [i for i in range(3)] except Exception as e: raise
+//! Module docs with `code` and [link](url).
+/// Item docs: **bold**, [`Type::method`].
+pub(crate) fn find(text: &str, pos: usize) -> Option<(usize, char)> {
+    if let Some(c) = text.chars().rev().find(|c| !c.is_whitespace()) { return Some((pos, c)); }
+    let s = format!("{}\t{:?}", 'x', b'\n'); text.get(..pos).map(str::len).unwrap_or_default();
+    #[cfg(test)] mod tests { use super::*; #[test] fn t() { assert_eq!(1 + 1, 2); } }
+    unsafe { std::ptr::null::<u8>() }; const N: usize = 4; static S: &[u8] = b"abc";
+}
+"#;
+
+/// Markdowntown patch: заранее, в фоновом потоке, компилирует подсветку языков `langs`
+/// (как в строке ```` ```lang ````), чтобы первый блок кода на этом языке не задерживал
+/// кадр. Каждый язык — один раз за запуск; неизвестные пропускаются.
+#[cfg(feature = "better_syntax_highlighting")]
+pub fn warm_up_highlighting(langs: impl IntoIterator<Item = String>) {
+    static STARTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Default::default);
+    let new: Vec<String> = {
+        let Ok(mut started) = STARTED.lock() else {
+            return;
+        };
+        langs
+            .into_iter()
+            .filter(|lang| started.insert(lang.clone()))
+            .collect()
+    };
+    if new.is_empty() {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("syntax-warm-up".into())
+        .spawn(move || {
+            let ps: &SyntaxSet = &SYNTAX_SET;
+            for lang in new {
+                if let Some(syntax) = ps.find_syntax_by_token(&lang) {
+                    // Выражения компилируются, только когда разбор доходит до их контекста,
+                    // а перечислить контексты синтаксиса syntect не даёт — поэтому образец
+                    // с типичными конструкциями разных языков.
+                    let mut state = syntect::parsing::ParseState::new(syntax);
+                    for line in WARM_UP_SAMPLE.lines() {
+                        let _ = state.parse_line(&format!("{line}\n"), ps);
+                    }
+                }
+            }
+        });
+}
+
 /// A cache used for storing content such as images.
 #[derive(Debug)]
 pub struct CommonMarkCache {
     // Everything stored in `CommonMarkCache` must take into account that
     // the cache is for multiple `CommonMarkviewer`s with different source_ids.
     #[cfg(feature = "better_syntax_highlighting")]
-    ps: SyntaxSet,
+    ps: std::sync::Arc<SyntaxSet>,
+
+    /// Markdowntown patch: подсвеченные блоки кода по хэшу (язык, текст, тема, шрифт).
+    /// `RefCell`: раскладку вызывает `TextEdit` через замыкание без `&mut`.
+    #[cfg(feature = "better_syntax_highlighting")]
+    highlighted: std::cell::RefCell<HashMap<u64, LayoutJob>>,
 
     #[cfg(feature = "better_syntax_highlighting")]
     ts: ThemeSet,
@@ -463,7 +576,9 @@ impl Default for CommonMarkCache {
     fn default() -> Self {
         Self {
             #[cfg(feature = "better_syntax_highlighting")]
-            ps: SyntaxSet::load_defaults_newlines(),
+            ps: std::sync::Arc::clone(&SYNTAX_SET),
+            #[cfg(feature = "better_syntax_highlighting")]
+            highlighted: Default::default(),
             #[cfg(feature = "better_syntax_highlighting")]
             ts: ThemeSet::load_defaults(),
             link_hooks: HashMap::new(),
@@ -477,9 +592,9 @@ impl Default for CommonMarkCache {
 impl CommonMarkCache {
     #[cfg(feature = "better_syntax_highlighting")]
     pub fn add_syntax_from_folder(&mut self, path: &str) {
-        let mut builder = self.ps.clone().into_builder();
+        let mut builder = SyntaxSet::clone(&self.ps).into_builder();
         let _ = builder.add_from_folder(path, true);
-        self.ps = builder.build();
+        self.ps = std::sync::Arc::new(builder.build());
     }
 
     #[cfg(feature = "better_syntax_highlighting")]
@@ -488,9 +603,9 @@ impl CommonMarkCache {
         s: &str,
         fallback_name: Option<&str>,
     ) -> Result<(), syntect::parsing::ParseSyntaxError> {
-        let mut builder = self.ps.clone().into_builder();
+        let mut builder = SyntaxSet::clone(&self.ps).into_builder();
         SyntaxDefinition::load_from_str(s, true, fallback_name).map(|d| builder.add(d))?;
-        self.ps = builder.build();
+        self.ps = std::sync::Arc::new(builder.build());
         Ok(())
     }
 
