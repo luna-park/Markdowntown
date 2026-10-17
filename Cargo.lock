@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "markdowntown"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "eframe",
  "egui",
