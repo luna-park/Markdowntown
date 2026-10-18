@@ -93,6 +93,8 @@ H2 (17.1pt, выделенный).
 
 - `src/parsers/pulldown.rs`, `heading_rule`: под H1 и H2 — линия во всю ширину, как
   `border-bottom` у GitHub (и в нашем HTML-экспорте).
+- `egui_commonmark_backend/src/elements.rs`, `rule`: горизонтальная линия `---` вдвое
+  толще обычного разделителя egui (толщина `bg_stroke` на время рисования — ×2).
 - Сноски как на GitHub: `CommonMarkViewer::footnote_numbers` — номера по меткам
   (`CommonMarkOptions::footnote_number`); ссылка на сноску (`elements::footnote_start`) —
   номер в квадратных скобках (`[1]`) цветом ссылок, клик открывает `#fn-<метка>`

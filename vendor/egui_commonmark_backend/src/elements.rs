@@ -2,7 +2,11 @@ use egui::{self, NumExt, RichText, Sense, TextBuffer, TextStyle, Ui, Vec2, epain
 
 #[inline]
 pub fn rule(ui: &mut Ui, end_line: bool) {
+    // Линия `---` вдвое толще обычного разделителя: у `Separator` толщина — из visuals.
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke.width;
+    ui.visuals_mut().widgets.noninteractive.bg_stroke.width = stroke * 2.0;
     ui.add(egui::Separator::default().horizontal());
+    ui.visuals_mut().widgets.noninteractive.bg_stroke.width = stroke;
     // This does not add a new line, but instead ends the separator
     if end_line {
         newline(ui);
