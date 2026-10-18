@@ -131,6 +131,21 @@ enum Dialog {
     About,
 }
 
+/// Строка не длиннее `max_chars` символов: середина заменяется на «…», чтобы у пути
+/// остались видны и начало, и имя файла.
+fn elide_middle(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars || max_chars < 3 {
+        return text.to_owned();
+    }
+    let keep = max_chars - 1;
+    let head = keep / 2;
+    let tail = keep - head;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - tail).collect();
+    format!("{start}…{end}")
+}
+
 /// Автор — в строке меню и в окне About.
 const AUTHOR: &str = "luna-park discoteque";
 /// Страница релизов: новые версии скачиваются отсюда.
@@ -174,6 +189,9 @@ pub struct MarkdowntownApp {
     export: Option<mpsc::Receiver<String>>,
     /// Файлы, открытые из Проводника, пока программа уже запущена.
     inbox: Inbox,
+    /// Ссылка под курсором в превью (адрес) и куда она ведёт — для строки статуса.
+    /// Описание считается один раз на ссылку, а не каждый кадр.
+    link_hover: Option<(String, (String, bool))>,
 }
 
 impl MarkdowntownApp {
@@ -221,6 +239,7 @@ impl MarkdowntownApp {
             drafts,
             export: None,
             inbox,
+            link_hover: None,
         };
         app.restore_session();
         for path in files {
@@ -1158,9 +1177,41 @@ impl MarkdowntownApp {
         self.request(Action::Close(ids));
     }
 
+    /// Ссылка под курсором (её сообщает `egui_commonmark` при рисовании превью) —
+    /// строка статуса покажет, куда она ведёт. Панель статуса рисуется раньше превью,
+    /// поэтому показ — со следующего кадра.
+    fn update_link_hover(&mut self, ctx: &egui::Context) {
+        let url = egui_commonmark::take_hovered_link(ctx);
+        if url.as_deref() == self.link_hover.as_ref().map(|(u, _)| u.as_str()) {
+            return;
+        }
+        let base = self.tab().doc.base_dir().map(Path::to_owned);
+        self.link_hover = url.map(|url| {
+            let description = links::describe(&url, base.as_deref(), &self.tab().doc.text);
+            (url, description)
+        });
+        ctx.request_repaint();
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(&self.status);
+            match &self.link_hover {
+                // Пока курсор над ссылкой — куда она ведёт (вместо сообщения).
+                Some((_, (description, missing))) => {
+                    // Место — за вычетом правой части (кодировка, окончания строк).
+                    let char_width = ui.text_style_height(&egui::TextStyle::Body) * 0.5;
+                    let max_chars = ((ui.available_width() - 160.0) / char_width).max(20.0);
+                    let text = elide_middle(description, max_chars as usize);
+                    if *missing {
+                        ui.colored_label(ui.visuals().error_fg_color, text);
+                    } else {
+                        ui.label(text);
+                    }
+                }
+                None => {
+                    ui.label(&self.status);
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let format = self.tab().doc.format();
                 ui.label(format.line_ending.label());
@@ -1328,6 +1379,7 @@ impl eframe::App for MarkdowntownApp {
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         self.outline_panel(ui);
         self.panels(ui);
+        self.update_link_hover(&ctx);
         self.handle_links(&ctx);
         handle_wheel_zoom(&ctx);
         self.show_dialog(&ctx);
@@ -1409,6 +1461,17 @@ mod tests {
     /// Проверяются встроенные шрифты: системные запасные (`fonts.rs`) могут
     /// отсутствовать.
     const UI_SYMBOLS: &[char] = &['⏶', '⏷', '×', '…', '−', '“', '”', '•', '©'];
+
+    #[test]
+    fn elide_middle_keeps_both_ends() {
+        assert_eq!(elide_middle("short", 10), "short");
+        let path = r"Open in a tab: F:\Info\_tutorial\Game_Design\guide.md";
+        let elided = elide_middle(path, 30);
+        assert_eq!(elided.chars().count(), 30);
+        assert!(elided.starts_with("Open in a tab:"));
+        assert!(elided.ends_with("guide.md"));
+        assert!(elided.contains('…'));
+    }
 
     #[test]
     fn ui_symbols_exist_in_default_fonts() {

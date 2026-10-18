@@ -320,7 +320,7 @@ fn footnotes_to_end<'a>(events: Vec<Event<'a>>, order: &[String]) -> Vec<Event<'
                     String::new()
                 };
                 format!(
-                    "<sup class=\"footnote-ref\"><a href=\"#fn-{label}\"{id}>{}</a></sup>",
+                    "<sup class=\"footnote-ref\"><a href=\"#fn-{label}\"{id}>[{}]</a></sup>",
                     i + 1
                 )
             }
@@ -819,13 +819,11 @@ After.
         );
         let html = &out.html;
         // Номера — по порядку первой ссылки; обратная ссылка — к первой.
-        assert!(
-            html.contains(
-                "<sup class=\"footnote-ref\"><a href=\"#fn-b\" id=\"fnref-b\">1</a></sup>"
-            )
-        );
-        assert!(html.contains("<a href=\"#fn-a\" id=\"fnref-a\">2</a>"));
-        assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-b\">1</a></sup>"));
+        assert!(html.contains(
+            "<sup class=\"footnote-ref\"><a href=\"#fn-b\" id=\"fnref-b\">[1]</a></sup>"
+        ));
+        assert!(html.contains("<a href=\"#fn-a\" id=\"fnref-a\">[2]</a>"));
+        assert!(html.contains("<sup class=\"footnote-ref\"><a href=\"#fn-b\">[1]</a></sup>"));
         // Определения — в конце, по номерам, с «↩» внутри абзаца; неиспользуемое — нет.
         let section = html.find("<section class=\"footnotes\">").unwrap();
         assert!(html.find("After.").unwrap() < section);

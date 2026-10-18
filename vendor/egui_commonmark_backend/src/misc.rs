@@ -196,6 +196,24 @@ impl Style {
     }
 }
 
+/// Markdowntown patch: адрес ссылки под курсором (одна запись на кадр) — приложение
+/// показывает в строке статуса, куда ведёт ссылка.
+const HOVERED_LINK: &str = "markdowntown-hovered-link";
+
+/// Markdowntown patch: запомнить адрес ссылки, если курсор над ней.
+pub fn report_hovered_link(response: &egui::Response, url: &str) {
+    if response.hovered() {
+        response
+            .ctx
+            .data_mut(|d| d.insert_temp(egui::Id::new(HOVERED_LINK), url.to_owned()));
+    }
+}
+
+/// Markdowntown patch: адрес ссылки под курсором в этом кадре (и забыть его).
+pub fn take_hovered_link(ctx: &egui::Context) -> Option<String> {
+    ctx.data_mut(|d| d.remove_temp::<String>(egui::Id::new(HOVERED_LINK)))
+}
+
 /// Markdowntown patch: жирное начертание — семейство шрифта `heading`, если приложение
 /// его установило. У egui нет жирного начертания (`strong()` меняет только цвет), а
 /// запросить неустановленное семейство нельзя — egui упадёт.
@@ -249,17 +267,21 @@ impl Link {
         }
         if cache.link_hooks().contains_key(&destination) {
             let ui_link = ui.link(layout_job);
+            report_hovered_link(&ui_link, &destination);
             if ui_link.clicked() || ui_link.middle_clicked() {
                 cache.link_hooks_mut().insert(destination, true);
             }
         } else if options.enable_scroll_to_heading
             && let Some(stripped) = destination.strip_prefix("#")
         {
-            if ui.link(layout_job).clicked() {
+            let ui_link = ui.link(layout_job);
+            report_hovered_link(&ui_link, &destination);
+            if ui_link.clicked() {
                 scroll_to_heading.replace(stripped.to_string());
             };
         } else {
-            ui.hyperlink_to(layout_job, destination);
+            let response = ui.hyperlink_to(layout_job, &destination);
+            report_hovered_link(&response, &destination);
         }
     }
 }

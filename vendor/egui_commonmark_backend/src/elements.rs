@@ -62,24 +62,23 @@ pub fn number_point(ui: &mut Ui, number: &str) {
 /// Markdowntown patch: ссылка на сноску — номер цветом ссылок, как на GitHub; клик
 /// открывает `#fn-<метка>` (приложение прокручивает к сноске).
 pub fn footnote_start(ui: &mut Ui, label: &str, number: &str) {
-    let text = RichText::new(number)
+    // В квадратных скобках — так номер заметнее и по нему легче попасть.
+    let text = RichText::new(format!("[{number}]"))
         .raised()
         .small()
         .color(ui.visuals().hyperlink_color);
-    // Цифра мелкая — по ней легко промахнуться: нажимать можно и рядом с ней. По бокам —
-    // свои поля: текст превью выделяемый, и следующая за цифрой надпись (она добавлена
-    // позже, значит «выше») перехватила бы нажатие в общей с ней области.
-    const PAD: f32 = 3.0;
-    ui.add_space(PAD);
     let label_response = ui.add(egui::Label::new(text).sense(Sense::hover()));
-    ui.add_space(PAD);
-    let hit = label_response.rect.expand2(egui::vec2(PAD, 4.0));
+    // Область нажатия выше и ниже надписи. В стороны её не расширить: текст превью
+    // выделяемый, и следующая надпись (добавлена позже, значит «выше») перехватила бы
+    // нажатие в общей с ней области.
+    let hit = label_response.rect.expand2(egui::vec2(0.0, 4.0));
     let response = ui
         .interact(hit, label_response.id.with("hit"), Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let url = format!("#fn-{label}");
+    crate::misc::report_hovered_link(&response, &url);
     if response.clicked() {
-        ui.ctx()
-            .open_url(egui::OpenUrl::same_tab(format!("#fn-{label}")));
+        ui.ctx().open_url(egui::OpenUrl::same_tab(url));
     }
 }
 
@@ -90,11 +89,11 @@ pub fn footnote_backref(ui: &mut Ui, label: &str) {
     let text = RichText::new("↩").color(ui.visuals().hyperlink_color);
     let response = ui
         .add(egui::Label::new(text).sense(Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Back to the reference");
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let url = format!("#fnref-{label}");
+    crate::misc::report_hovered_link(&response, &url);
     if response.clicked() {
-        ui.ctx()
-            .open_url(egui::OpenUrl::same_tab(format!("#fnref-{label}")));
+        ui.ctx().open_url(egui::OpenUrl::same_tab(url));
     }
 }
 

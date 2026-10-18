@@ -139,6 +139,58 @@ pub fn find_anchor(text: &str, anchor: &str) -> Option<usize> {
     find_footnote(text, anchor)
 }
 
+/// Куда ведёт ссылка — для строки статуса при наведении: то же, что сделает клик
+/// (`classify`). `text` — текущий документ (заголовки и сноски для якорей). `true` —
+/// ссылка никуда не ведёт.
+pub fn describe(url: &str, base: Option<&Path>, text: &str) -> (String, bool) {
+    match classify(url, base) {
+        Target::External => (url.trim().to_owned(), false),
+        Target::Anchor(anchor) => describe_anchor(text, &anchor),
+        Target::Markdown { path, anchor } => {
+            let mut s = format!("Open in a tab: {}", path.display());
+            if let Some(anchor) = anchor {
+                s.push('#');
+                s.push_str(&anchor);
+            }
+            (s, false)
+        }
+        Target::LocalFile(path) => {
+            // Как `open_local`: что сделает клик.
+            let action = if path.is_dir() {
+                "Open the folder"
+            } else if safe_to_open(&path) {
+                "Open with the default app"
+            } else {
+                "Show in Explorer"
+            };
+            (format!("{action}: {}", path.display()), false)
+        }
+        Target::Missing(path) => (format!("Not found: {}", path.display()), true),
+    }
+}
+
+/// Якорь текущего документа — в том же порядке, что `find_anchor`: заголовок, затем сноска.
+fn describe_anchor(text: &str, anchor: &str) -> (String, bool) {
+    let Some(byte) = find_anchor(text, anchor) else {
+        return (format!("Not found: #{anchor}"), true);
+    };
+    if let Some(heading) = crate::outline::headings(text)
+        .into_iter()
+        .find(|h| h.byte == byte)
+    {
+        return (format!("Go to “{}”", heading.text), false);
+    }
+    if anchor.starts_with("fnref-") {
+        return ("Back to the reference".to_owned(), false);
+    }
+    let number = crate::segment::split_all(text)
+        .footnotes
+        .iter()
+        .position(|f| f.definition == byte)
+        .map_or(0, |i| i + 1);
+    (format!("Footnote {number}"), false)
+}
+
 /// Якоря сносок, как в HTML-экспорте и у GitHub: `fn-<метка>` — определение сноски,
 /// `fnref-<метка>` — первая ссылка на неё.
 fn find_footnote(text: &str, anchor: &str) -> Option<usize> {
@@ -339,5 +391,39 @@ mod tests {
         assert_eq!(find_anchor(text, "fn-n"), text.find("[^n]:"));
         assert_eq!(find_anchor(text, "fnref-n"), text.find("[^n]"));
         assert_eq!(find_anchor(text, "fn-missing"), None);
+    }
+
+    #[test]
+    fn describes_where_links_go() {
+        let dir = temp_dir("describe");
+        std::fs::write(dir.join("other.md"), "# x").unwrap();
+        std::fs::write(dir.join("pic.png"), b"PNG").unwrap();
+        std::fs::write(dir.join("tool.exe"), b"MZ").unwrap();
+        let text = "# Intro\n\nRef[^a] and[^b].\n\n[^b]: B.\n\n[^a]: A.\n";
+        let d = |url: &str| describe(url, Some(&dir), text);
+
+        assert_eq!(
+            d("https://example.com/x"),
+            ("https://example.com/x".into(), false)
+        );
+        assert_eq!(d("#intro"), ("Go to “Intro”".into(), false));
+        assert_eq!(d("#nope"), ("Not found: #nope".into(), true));
+        // Номер сноски — по порядку первой ссылки, как в превью.
+        assert_eq!(d("#fn-a"), ("Footnote 1".into(), false));
+        assert_eq!(d("#fn-b"), ("Footnote 2".into(), false));
+        assert_eq!(d("#fnref-a"), ("Back to the reference".into(), false));
+
+        let (s, missing) = d("other.md#part");
+        assert!(
+            s.starts_with("Open in a tab: ") && s.ends_with("other.md#part"),
+            "{s}"
+        );
+        assert!(!missing);
+        assert!(d("pic.png").0.starts_with("Open with the default app: "));
+        assert!(d("tool.exe").0.starts_with("Show in Explorer: "));
+        assert!(d("sub").0.starts_with("Open the folder: "));
+        let (s, missing) = d("gone.md");
+        assert!(s.starts_with("Not found: ") && missing, "{s}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
