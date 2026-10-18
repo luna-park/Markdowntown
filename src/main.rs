@@ -11,6 +11,7 @@ mod export;
 mod file_assoc;
 mod fonts;
 mod gpu;
+mod i18n;
 mod links;
 mod logging;
 mod math;

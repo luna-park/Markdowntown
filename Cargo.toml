@@ -53,11 +53,13 @@ winresource = "0.1.34"
 # Ассоциация с .md: реестр HKCU (winreg), уведомление Проводника (SHChangeNotify);
 # открытие файлов и адресов (ms-settings:) обработчиком Windows (ShellExecuteW);
 # один экземпляр — именованный канал (Pipes и то, что нужно его функциям);
-# видеокарта с подключённым монитором — EnumDisplayDevicesW (Gdi).
+# видеокарта с подключённым монитором — EnumDisplayDevicesW (Gdi);
+# язык интерфейса по умолчанию — GetUserDefaultUILanguage (Globalization).
 [target."cfg(windows)".dependencies]
 # Окно программы (HWND) — вывести на передний план; та же версия, что у eframe.
 raw-window-handle = "0.6"
 windows-sys = { version = "0.61", features = [
+    "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Storage_FileSystem",

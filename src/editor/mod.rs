@@ -13,6 +13,7 @@ use egui::text_edit::TextEditState;
 use egui::{Galley, Id, Key, KeyboardShortcut, Modifiers};
 
 use crate::document::Document;
+use crate::i18n::{tr, trf};
 use commands::Edit;
 use highlight::Palette;
 
@@ -259,7 +260,7 @@ impl Editor {
         ui.horizontal(|ui| {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search.query)
-                    .hint_text("Find")
+                    .hint_text(tr!("Find", "Найти"))
                     .desired_width(200.0),
             );
             if std::mem::take(&mut self.search.focus_query) {
@@ -279,9 +280,9 @@ impl Editor {
             let case = ui
                 .add(egui::Button::new("Aa").selected(self.search.case_sensitive))
                 .on_hover_text(if self.search.case_sensitive {
-                    "Match case: on"
+                    tr!("Match case: on", "Учитывать регистр: да")
                 } else {
-                    "Match case: off"
+                    tr!("Match case: off", "Учитывать регистр: нет")
                 });
             if case.clicked() {
                 self.search.case_sensitive = !self.search.case_sensitive;
@@ -289,25 +290,34 @@ impl Editor {
             let total = self.search.matches.len();
             let status = match (self.search.query.is_empty(), self.search.current) {
                 (true, _) => String::new(),
-                (false, _) if total == 0 => "No results".to_owned(),
-                (false, Some(i)) => format!("{} of {total}", i + 1),
-                (false, None) => format!("{total} found"),
+                (false, _) if total == 0 => tr!("No results", "Не найдено").to_owned(),
+                (false, Some(i)) => trf!("{} of {total}", "{} из {total}", i + 1),
+                (false, None) => trf!("{total} found", "Найдено: {total}"),
             };
             ui.label(status);
             if ui
                 .button("⏶")
-                .on_hover_text("Previous (Shift+Enter)")
+                .on_hover_text(tr!("Previous (Shift+Enter)", "Предыдущее (Shift+Enter)"))
                 .clicked()
             {
                 self.step_match(-1);
             }
-            if ui.button("⏷").on_hover_text("Next (Enter)").clicked() {
+            if ui
+                .button("⏷")
+                .on_hover_text(tr!("Next (Enter)", "Следующее (Enter)"))
+                .clicked()
+            {
                 self.step_match(1);
             }
-            if !self.search.replace && ui.button("Replace…").clicked() {
+            if !self.search.replace && ui.button(tr!("Replace…", "Заменить…")).clicked()
+            {
                 self.search.replace = true;
             }
-            if ui.button("×").on_hover_text("Close (Esc)").clicked() {
+            if ui
+                .button("×")
+                .on_hover_text(tr!("Close (Esc)", "Закрыть (Esc)"))
+                .clicked()
+            {
                 close = true;
             }
         });
@@ -315,19 +325,22 @@ impl Editor {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.search.replacement)
-                        .hint_text("Replace")
+                        .hint_text(tr!("Replace with", "Заменить на"))
                         .desired_width(200.0),
                 );
                 let has_current = self.search.current.is_some();
                 if ui
-                    .add_enabled(has_current, egui::Button::new("Replace"))
+                    .add_enabled(has_current, egui::Button::new(tr!("Replace", "Заменить")))
                     .clicked()
                 {
                     self.replace_current(&ctx, doc, text_id);
                 }
                 if ui
-                    .add_enabled(!self.search.matches.is_empty(), egui::Button::new("All"))
-                    .on_hover_text("Replace all")
+                    .add_enabled(
+                        !self.search.matches.is_empty(),
+                        egui::Button::new(tr!("All", "Все")),
+                    )
+                    .on_hover_text(tr!("Replace all", "Заменить все"))
                     .clicked()
                 {
                     self.replace_all(&ctx, doc, text_id);

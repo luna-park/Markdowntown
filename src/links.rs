@@ -5,6 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::i18n::{Message, msg, tr, trf};
+
 /// Куда ведёт ссылка.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -147,7 +149,11 @@ pub fn describe(url: &str, base: Option<&Path>, text: &str) -> (String, bool) {
         Target::External => (url.trim().to_owned(), false),
         Target::Anchor(anchor) => describe_anchor(text, &anchor),
         Target::Markdown { path, anchor } => {
-            let mut s = format!("Open in a tab: {}", path.display());
+            let mut s = trf!(
+                "Open in a tab: {}",
+                "Открыть во вкладке: {}",
+                path.display()
+            );
             if let Some(anchor) = anchor {
                 s.push('#');
                 s.push_str(&anchor);
@@ -157,38 +163,47 @@ pub fn describe(url: &str, base: Option<&Path>, text: &str) -> (String, bool) {
         Target::LocalFile(path) => {
             // Как `open_local`: что сделает клик.
             let action = if path.is_dir() {
-                "Open the folder"
+                tr!("Open the folder", "Открыть папку")
             } else if safe_to_open(&path) {
-                "Open with the default app"
+                tr!(
+                    "Open with the default app",
+                    "Открыть программой по умолчанию"
+                )
             } else {
-                "Show in Explorer"
+                tr!("Show in Explorer", "Показать в Проводнике")
             };
             (format!("{action}: {}", path.display()), false)
         }
-        Target::Missing(path) => (format!("Not found: {}", path.display()), true),
+        Target::Missing(path) => (
+            trf!("Not found: {}", "Не найдено: {}", path.display()),
+            true,
+        ),
     }
 }
 
 /// Якорь текущего документа — в том же порядке, что `find_anchor`: заголовок, затем сноска.
 fn describe_anchor(text: &str, anchor: &str) -> (String, bool) {
     let Some(byte) = find_anchor(text, anchor) else {
-        return (format!("Not found: #{anchor}"), true);
+        return (trf!("Not found: #{anchor}", "Не найдено: #{anchor}"), true);
     };
     if let Some(heading) = crate::outline::headings(text)
         .into_iter()
         .find(|h| h.byte == byte)
     {
-        return (format!("Go to “{}”", heading.text), false);
+        return (trf!("Go to “{}”", "Перейти к «{}»", heading.text), false);
     }
     if anchor.starts_with("fnref-") {
-        return ("Back to the reference".to_owned(), false);
+        return (
+            tr!("Back to the reference", "Назад к ссылке").to_owned(),
+            false,
+        );
     }
     let number = crate::segment::split_all(text)
         .footnotes
         .iter()
         .position(|f| f.definition == byte)
         .map_or(0, |i| i + 1);
-    (format!("Footnote {number}"), false)
+    (trf!("Footnote {number}", "Сноска {number}"), false)
 }
 
 /// Якоря сносок, как в HTML-экспорте и у GitHub: `fn-<метка>` — определение сноски,
@@ -211,13 +226,25 @@ fn find_footnote(text: &str, anchor: &str) -> Option<usize> {
 
 /// Открыть локальный файл программой по умолчанию (безопасные типы) или показать
 /// в Проводнике. Возвращает сообщение для строки статуса.
-pub fn open_local(path: &Path) -> String {
+pub fn open_local(path: &Path) -> Message {
     let result = if safe_to_open(path) || path.is_dir() {
-        open_with_shell(path).map(|()| format!("Opened {}", path.display()))
+        open_with_shell(path).map(|()| msg!("Opened {}", "Открыт {}", path.display()))
     } else {
-        reveal_in_explorer(path).map(|()| format!("Shown in Explorer: {}", path.display()))
+        reveal_in_explorer(path).map(|()| {
+            msg!(
+                "Shown in Explorer: {}",
+                "Показан в Проводнике: {}",
+                path.display()
+            )
+        })
     };
-    result.unwrap_or_else(|e| format!("Cannot open {}: {e}", path.display()))
+    result.unwrap_or_else(|e| {
+        msg!(
+            "Cannot open {}: {e}",
+            "Не удалось открыть {}: {e}",
+            path.display()
+        )
+    })
 }
 
 #[cfg(windows)]

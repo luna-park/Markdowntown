@@ -3,6 +3,7 @@
 
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
+use crate::i18n::tr;
 use crate::segment;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +93,7 @@ impl Outline {
     ) -> Option<usize> {
         let headings = self.headings(text, version);
         if headings.is_empty() {
-            ui.weak("No headings");
+            ui.weak(tr!("No headings", "Нет заголовков"));
             return None;
         }
         // Уровни сдвигаются к самому крупному в документе: если H1 нет, H2 — без отступа.

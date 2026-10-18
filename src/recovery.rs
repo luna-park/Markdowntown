@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{count, tr, trf};
+
 const DRAFTS_DIR: &str = "drafts";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,13 +45,13 @@ impl Draft {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let minutes = now.saturating_sub(self.saved_at) / 60;
-        match minutes {
-            0 => "less than a minute ago".to_owned(),
-            1 => "1 minute ago".to_owned(),
-            m if m < 120 => format!("{m} minutes ago"),
-            m if m < 48 * 60 => format!("{} hours ago", m / 60),
-            m => format!("{} days ago", m / 60 / 24),
-        }
+        let amount = match minutes {
+            0 => return tr!("less than a minute ago", "меньше минуты назад").to_owned(),
+            m if m < 120 => count(m, ["minute", "minutes"], ["минуту", "минуты", "минут"]),
+            m if m < 48 * 60 => count(m / 60, ["hour", "hours"], ["час", "часа", "часов"]),
+            m => count(m / 60 / 24, ["day", "days"], ["день", "дня", "дней"]),
+        };
+        trf!("{amount} ago", "{amount} назад")
     }
 }
 

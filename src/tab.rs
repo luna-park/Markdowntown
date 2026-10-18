@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::diagram::DiagramService;
 use crate::document::{DiskChange, Document};
 use crate::editor::{Editor, EditorGeometry};
+use crate::i18n::{Message, msg};
 use crate::outline::Outline;
 use crate::preview::Preview;
 use crate::recovery::{Draft, Drafts};
@@ -24,7 +25,7 @@ pub const SECTION_PROBE: f32 = 16.0;
 
 /// Что показать пользователю после проверки файла на диске.
 pub enum DiskEvent {
-    Status(String),
+    Status(Message),
     /// Файл изменён другой программой, а во вкладке есть свои правки — спросить.
     Conflict,
 }
@@ -144,16 +145,20 @@ impl Tab {
         match self.doc.disk_change()? {
             DiskChange::Modified if !self.doc.is_dirty() => {
                 Some(DiskEvent::Status(match self.doc.reload() {
-                    Ok(()) => "Reloaded: the file was changed on disk".into(),
-                    Err(e) => format!("Cannot reload: {e}"),
+                    Ok(()) => msg!(
+                        "Reloaded: the file was changed on disk",
+                        "Перечитан: файл изменён на диске"
+                    ),
+                    Err(e) => msg!("Cannot reload: {e}", "Не удалось перечитать: {e}"),
                 }))
             }
             DiskChange::Modified => Some(DiskEvent::Conflict),
             DiskChange::Removed => {
                 self.doc.accept_disk_state();
-                Some(DiskEvent::Status(
-                    "The file was deleted on disk; save to recreate it".into(),
-                ))
+                Some(DiskEvent::Status(msg!(
+                    "The file was deleted on disk; save to recreate it",
+                    "Файл удалён с диска; сохраните, чтобы создать его заново"
+                )))
             }
         }
     }

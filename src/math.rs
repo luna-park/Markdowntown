@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use ratex_types::{Color, MathStyle};
 
 use crate::diagram::Rasterizer;
+use crate::i18n::trf;
 
 /// Формула в SVG. Размеры — в единицах SVG (`font_size` единиц на em).
 pub struct Formula {
@@ -149,7 +150,7 @@ impl MathCache {
                 };
                 let color = ui.visuals().error_fg_color;
                 ui.colored_label(color, source)
-                    .on_hover_text(format!("Formula error: {error}"));
+                    .on_hover_text(trf!("Formula error: {error}", "Ошибка в формуле: {error}"));
             }
         }
     }

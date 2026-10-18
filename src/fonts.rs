@@ -35,7 +35,7 @@ const EDITOR_FONT_FILES: &[(&str, &str)] = &[
 ];
 
 /// Название встроенного моноширинного шрифта egui.
-pub const BUILTIN_EDITOR_FONT: &str = "Hack (built-in)";
+pub const BUILTIN_EDITOR_FONT: &str = "Hack";
 
 pub fn editor_family() -> FontFamily {
     FontFamily::Name(EDITOR_FAMILY.into())

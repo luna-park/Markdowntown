@@ -1,6 +1,7 @@
 //! Окно просмотра диаграммы крупно: масштаб, прокрутка, перетаскивание.
 
 use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
+use crate::i18n::{tr, trf};
 
 const MIN_ZOOM: f32 = 0.1;
 const MAX_ZOOM: f32 = 8.0;
@@ -52,7 +53,7 @@ impl DiagramViewer {
         };
 
         let mut open = true;
-        egui::Window::new("Diagram")
+        egui::Window::new(tr!("Diagram", "Диаграмма"))
             .id(egui::Id::new("diagram_viewer"))
             .open(&mut open)
             .default_size([900.0, 650.0])
@@ -77,33 +78,44 @@ impl DiagramViewer {
         if let Some(error) = error {
             ui.colored_label(
                 ui.visuals().error_fg_color,
-                format!("Mermaid error: {error}"),
+                trf!("Mermaid error: {error}", "Ошибка Mermaid: {error}"),
             );
             return;
         }
         let Some((texture, size)) = image else {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak("Rendering diagram…");
+                ui.weak(tr!("Rendering diagram…", "Диаграмма рисуется…"));
             });
             return;
         };
 
         ui.horizontal(|ui| {
-            if ui.button("−").on_hover_text("Zoom out").clicked() {
+            if ui
+                .button("−")
+                .on_hover_text(tr!("Zoom out", "Уменьшить"))
+                .clicked()
+            {
                 self.zoom_at(size, self.zoom / 1.25, None);
             }
-            if ui.button("+").on_hover_text("Zoom in").clicked() {
+            if ui
+                .button("+")
+                .on_hover_text(tr!("Zoom in", "Увеличить"))
+                .clicked()
+            {
                 self.zoom_at(size, self.zoom * 1.25, None);
             }
             if ui.button("100%").clicked() {
                 self.zoom_at(size, 1.0, None);
             }
-            if ui.button("Fit").clicked() {
+            if ui.button(tr!("Fit", "Вписать")).clicked() {
                 self.fit_pending = true;
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
-            ui.weak("Ctrl+wheel to zoom, drag to pan, Esc to close");
+            ui.weak(tr!(
+                "Ctrl+wheel to zoom, drag to pan, Esc to close",
+                "Ctrl+колесо — масштаб, перетаскивание — сдвиг, Esc — закрыть"
+            ));
         });
         ui.separator();
 

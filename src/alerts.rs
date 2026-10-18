@@ -9,8 +9,8 @@ use egui_commonmark::{Alert, AlertBundle};
 pub struct AlertKind {
     /// Как в разметке: `[!NOTE]`.
     pub id: &'static str,
-    /// Заголовок над текстом.
-    pub title: &'static str,
+    /// Заголовок над текстом: по-английски (как на GitHub) и по-русски.
+    pub titles: [&'static str; 2],
     /// Класс в HTML (`markdown-alert-…`) и переменная цвета в CSS экспорта (`--…`).
     pub css: &'static str,
     /// SVG 16×16, один `path` без заливки.
@@ -23,7 +23,7 @@ pub struct AlertKind {
 pub const ALERTS: [AlertKind; 5] = [
     AlertKind {
         id: "NOTE",
-        title: "Note",
+        titles: ["Note", "Примечание"],
         css: "note",
         icon: include_str!("../assets/octicons/info-16.svg"),
         light: Color32::from_rgb(0x09, 0x69, 0xda),
@@ -31,7 +31,7 @@ pub const ALERTS: [AlertKind; 5] = [
     },
     AlertKind {
         id: "TIP",
-        title: "Tip",
+        titles: ["Tip", "Совет"],
         css: "tip",
         icon: include_str!("../assets/octicons/light-bulb-16.svg"),
         light: Color32::from_rgb(0x1a, 0x7f, 0x37),
@@ -39,7 +39,7 @@ pub const ALERTS: [AlertKind; 5] = [
     },
     AlertKind {
         id: "IMPORTANT",
-        title: "Important",
+        titles: ["Important", "Важно"],
         css: "important",
         icon: include_str!("../assets/octicons/report-16.svg"),
         light: Color32::from_rgb(0x82, 0x50, 0xdf),
@@ -47,7 +47,7 @@ pub const ALERTS: [AlertKind; 5] = [
     },
     AlertKind {
         id: "WARNING",
-        title: "Warning",
+        titles: ["Warning", "Предупреждение"],
         css: "warning",
         icon: include_str!("../assets/octicons/alert-16.svg"),
         light: Color32::from_rgb(0x9a, 0x67, 0x00),
@@ -55,13 +55,20 @@ pub const ALERTS: [AlertKind; 5] = [
     },
     AlertKind {
         id: "CAUTION",
-        title: "Caution",
+        titles: ["Caution", "Внимание"],
         css: "caution",
         icon: include_str!("../assets/octicons/stop-16.svg"),
         light: Color32::from_rgb(0xd1, 0x24, 0x2f),
         dark: Color32::from_rgb(0xf8, 0x51, 0x49),
     },
 ];
+
+impl AlertKind {
+    /// Заголовок на текущем языке интерфейса.
+    pub fn title(&self) -> &'static str {
+        self.titles[crate::i18n::language() as usize]
+    }
+}
 
 /// SVG значка с заливкой `fill` (`currentColor` — цветом текста в HTML).
 pub fn icon_svg(kind: &AlertKind, fill: &str) -> String {
@@ -70,13 +77,16 @@ pub fn icon_svg(kind: &AlertKind, fill: &str) -> String {
 }
 
 /// Набор alerts для превью: значки белые — `egui_commonmark` окрашивает их цветом alert.
+/// Заголовки — на текущем языке интерфейса.
 pub fn preview_bundle(dark: bool) -> AlertBundle {
-    static BUNDLES: LazyLock<[AlertBundle; 2]> =
-        LazyLock::new(|| [make_bundle(false), make_bundle(true)]);
-    BUNDLES[usize::from(dark)].clone()
+    static BUNDLES: LazyLock<[AlertBundle; 4]> = LazyLock::new(|| {
+        [(false, 0), (true, 0), (false, 1), (true, 1)].map(|(dark, lang)| make_bundle(dark, lang))
+    });
+    BUNDLES[crate::i18n::language() as usize * 2 + usize::from(dark)].clone()
 }
 
-fn make_bundle(dark: bool) -> AlertBundle {
+/// `lang` — индекс в `AlertKind::titles`.
+fn make_bundle(dark: bool, lang: usize) -> AlertBundle {
     AlertBundle::from_alerts(
         ALERTS
             .iter()
@@ -92,7 +102,7 @@ fn make_bundle(dark: bool) -> AlertBundle {
                     )),
                 }),
                 identifier: kind.id.to_owned(),
-                identifier_rendered: kind.title.to_owned(),
+                identifier_rendered: kind.titles[lang].to_owned(),
             })
             .collect(),
     )

@@ -225,7 +225,7 @@ impl Document {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "untitled".to_owned())
+            .unwrap_or_else(|| crate::i18n::tr!("untitled", "без имени").to_owned())
     }
 }
 

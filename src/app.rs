@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::diagram::DiagramService;
 use crate::document::Document;
 use crate::fonts;
+use crate::i18n::{self, Language, Message, msg, tr, trf};
 use crate::links::{self, Target};
 use crate::recovery::{Draft, Drafts};
 use crate::settings::{self, Settings, Theme, ViewMode};
@@ -20,6 +21,7 @@ A simple **Markdown** editor with a live _preview_.
 - Format with **Ctrl+B**, *Ctrl+I*, `Ctrl+E`, links with Ctrl+K
 - Find with Ctrl+F, replace with Ctrl+H
 - Zoom the whole UI with Ctrl+Plus / Ctrl+Minus or Ctrl+mouse wheel
+- Interface language: View → Language
 - [x] GitHub-flavored Markdown
 - [x] Mermaid diagrams
 
@@ -28,6 +30,33 @@ graph TD
     A[Editor] --> B[Preview]
 ```
 "#;
+
+const WELCOME_RU: &str = r#"# Markdowntown
+
+Простой редактор **Markdown** с живым _превью_.
+
+- Открыть файл — **Ctrl+O** (или перетащите его в окно), сохранить — **Ctrl+S**
+- Каждый файл — в своей вкладке: закрыть — **Ctrl+W**, переключиться — **Ctrl+Tab**
+- Оформление — **Ctrl+B**, *Ctrl+I*, `Ctrl+E`, ссылка — Ctrl+K
+- Поиск — Ctrl+F, замена — Ctrl+H
+- Масштаб интерфейса — Ctrl+Plus / Ctrl+Minus или Ctrl+колесо мыши
+- Язык интерфейса — Вид → Язык (View → Language)
+- [x] Markdown в варианте GitHub
+- [x] Диаграммы Mermaid
+
+```mermaid
+graph TD
+    A[Редактор] --> B[Превью]
+```
+"#;
+
+/// Приветствие (первый запуск, пустой сеанс) на языке интерфейса.
+fn welcome(language: Language) -> &'static str {
+    match language {
+        Language::English => WELCOME,
+        Language::Russian => WELCOME_RU,
+    }
+}
 
 /// Название и версия в заголовке окна — по ним проще разбирать сообщения об ошибках.
 pub const APP_TITLE: &str = concat!("Markdowntown v", env!("CARGO_PKG_VERSION"));
@@ -164,6 +193,7 @@ pub struct MarkdowntownApp {
     editor_ratio: f32,
     /// Ширина окна в прошлом кадре — чтобы заметить изменение размера.
     last_window_width: f32,
+    /// Сообщение в строке статуса (на языке, действовавшем, когда оно появилось).
     status: String,
 
     settings: Settings,
@@ -186,7 +216,7 @@ pub struct MarkdowntownApp {
 
     drafts: Option<Drafts>,
     /// Идущий экспорт в HTML: итог (сообщение для статуса) придёт из фонового потока.
-    export: Option<mpsc::Receiver<String>>,
+    export: Option<mpsc::Receiver<Message>>,
     /// Файлы, открытые из Проводника, пока программа уже запущена.
     inbox: Inbox,
     /// Ссылка под курсором в превью (адрес) и куда она ведёт — для строки статуса.
@@ -212,6 +242,7 @@ impl MarkdowntownApp {
             .storage
             .and_then(|s| eframe::get_value(s, settings::STORAGE_KEY))
             .unwrap_or_default();
+        i18n::set_language(settings.language);
         ctx.set_zoom_factor(settings.zoom);
         ctx.set_theme(settings.theme.preference());
         fonts::install(ctx, settings.editor_font.as_deref());
@@ -247,10 +278,13 @@ impl MarkdowntownApp {
         }
         if app.tabs.is_empty() {
             // Первый запуск или пустой сеанс — приветствие.
-            app.push_tab(Document::new_untitled(WELCOME));
+            app.push_tab(Document::new_untitled(welcome(app.settings.language)));
         }
         if data_dir.is_none() {
-            app.set_status("No writable data folder: settings and recovery are disabled".into());
+            app.set_status(msg!(
+                "No writable data folder: settings and recovery are disabled",
+                "Нет папки данных, доступной для записи: настройки и восстановление отключены"
+            ));
         }
         app
     }
@@ -374,12 +408,12 @@ impl MarkdowntownApp {
         match action {
             Action::New => {
                 self.push_tab(Document::new_untitled(""));
-                self.set_status("New document".into());
+                self.set_status(msg!("New document", "Новый документ"));
             }
             Action::Open(None) => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Markdown", &["md", "markdown"])
-                    .add_filter("All files", &["*"])
+                    .add_filter(tr!("All files", "Все файлы"), &["*"])
                     .pick_file()
                 {
                     self.open_path(&path);
@@ -464,12 +498,16 @@ impl MarkdowntownApp {
         }
         match Document::load(path) {
             Ok(doc) => {
-                self.set_status(format!("Opened {}", path.display()));
+                self.set_status(msg!("Opened {}", "Открыт {}", path.display()));
                 self.put_document(doc);
                 self.settings.add_recent(path);
             }
             Err(e) => {
-                self.set_status(format!("Cannot open {}: {e}", path.display()));
+                self.set_status(msg!(
+                    "Cannot open {}: {e}",
+                    "Не удалось открыть {}: {e}",
+                    path.display()
+                ));
                 if !path.exists() {
                     self.settings.remove_recent(path);
                 }
@@ -497,8 +535,9 @@ impl MarkdowntownApp {
                     .enumerate()
                     .any(|(i, t)| i != self.active && t.has_path(&path))
                 {
-                    self.set_status(format!(
+                    self.set_status(msg!(
                         "Cannot save: {} is open in another tab",
+                        "Не удалось сохранить: {} открыт в другой вкладке",
                         path.display()
                     ));
                     return;
@@ -513,10 +552,10 @@ impl MarkdowntownApp {
                 if let Some(drafts) = &self.drafts {
                     self.tabs[self.active].discard_draft(drafts);
                 }
-                format!("Saved {}", path.display())
+                msg!("Saved {}", "Сохранён {}", path.display())
             }
-            (Ok(()), None) => "Saved".to_owned(),
-            (Err(e), _) => format!("Cannot save: {e}"),
+            (Ok(()), None) => msg!("Saved", "Сохранено"),
+            (Err(e), _) => msg!("Cannot save: {e}", "Не удалось сохранить: {e}"),
         };
         self.set_status(status);
     }
@@ -558,19 +597,31 @@ impl MarkdowntownApp {
                     crate::export::to_html(&text, base_dir.as_deref(), &stem, theme, &renderer);
                 let message = match crate::document::write_atomic(&path, out.html.as_bytes()) {
                     Ok(()) => match out.warnings() {
-                        Some(w) => format!("Exported to {} ({w})", path.display()),
-                        None => format!("Exported to {}", path.display()),
+                        Some(w) => Message {
+                            english: format!("Exported to {} ({})", path.display(), w.english),
+                            text: trf!(
+                                "Exported to {} ({})",
+                                "Экспортировано в {} ({})",
+                                path.display(),
+                                w.text
+                            ),
+                        },
+                        None => msg!("Exported to {}", "Экспортировано в {}", path.display()),
                     },
-                    Err(e) => format!("Cannot export to {}: {e}", path.display()),
+                    Err(e) => msg!(
+                        "Cannot export to {}: {e}",
+                        "Не удалось экспортировать в {}: {e}",
+                        path.display()
+                    ),
                 };
                 let _ = tx.send(message);
             });
         match spawned {
             Ok(_) => {
                 self.export = Some(rx);
-                self.set_status("Exporting to HTML…".into());
+                self.set_status(msg!("Exporting to HTML…", "Экспорт в HTML…"));
             }
-            Err(e) => self.set_status(format!("Cannot export: {e}")),
+            Err(e) => self.set_status(msg!("Cannot export: {e}", "Не удалось экспортировать: {e}")),
         }
     }
 
@@ -588,19 +639,23 @@ impl MarkdowntownApp {
             Err(mpsc::TryRecvError::Disconnected) => {
                 // Поток завершился без ответа — паника, она уже в журнале.
                 self.export = None;
-                self.set_status("Cannot export: internal error (see log)".into());
+                self.set_status(msg!(
+                    "Cannot export: internal error (see log)",
+                    "Не удалось экспортировать: внутренняя ошибка (см. журнал)"
+                ));
             }
         }
     }
 
-    /// Сообщение в строке статуса; оно же — запись в журнал (ошибки — предупреждением).
-    fn set_status(&mut self, message: String) {
-        if message.starts_with("Cannot") {
-            log::warn!("{message}");
+    /// Сообщение в строке статуса; оно же — запись в журнал по-английски (ошибки —
+    /// предупреждением).
+    fn set_status(&mut self, message: Message) {
+        if message.english.starts_with("Cannot") {
+            log::warn!("{}", message.english);
         } else {
-            log::info!("{message}");
+            log::info!("{}", message.english);
         }
-        self.status = message;
+        self.status = message.text;
     }
 
     // ----- Черновики и диск -----
@@ -653,11 +708,14 @@ impl MarkdowntownApp {
             ui.set_max_width(420.0);
             match &dialog {
                 Dialog::Unsaved(action) => {
-                    ui.heading("Unsaved changes");
-                    ui.label(format!("Save changes to “{name}” before closing?"));
+                    ui.heading(tr!("Unsaved changes", "Несохранённые изменения"));
+                    ui.label(trf!(
+                        "Save changes to “{name}” before closing?",
+                        "Сохранить изменения в «{name}» перед закрытием?"
+                    ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Save").clicked() {
+                        if ui.button(tr!("Save", "Сохранить")).clicked() {
                             self.save(false);
                             // Сохранение отменили в диалоге выбора файла — остаёмся.
                             if !self.tab().doc.is_dirty() {
@@ -667,11 +725,11 @@ impl MarkdowntownApp {
                             }
                             keep_open = false;
                         }
-                        if ui.button("Don't Save").clicked() {
+                        if ui.button(tr!("Don't Save", "Не сохранять")).clicked() {
                             self.resolve_unsaved(action.clone(), false);
                             keep_open = false;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(tr!("Cancel", "Отмена")).clicked() {
                             if matches!(action, Action::Exit) {
                                 self.cancel_exit();
                             }
@@ -680,25 +738,41 @@ impl MarkdowntownApp {
                     });
                 }
                 Dialog::ExternalChange => {
-                    ui.heading("File changed on disk");
-                    ui.label(format!(
-                        "“{name}” was changed by another program, and you have unsaved changes."
+                    ui.heading(tr!("File changed on disk", "Файл изменён на диске"));
+                    ui.label(trf!(
+                        "“{name}” was changed by another program, and you have unsaved changes.",
+                        "«{name}» изменён другой программой, а у вас есть несохранённые изменения."
                     ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Reload (discard my changes)").clicked() {
+                        if ui
+                            .button(tr!(
+                                "Reload (discard my changes)",
+                                "Перечитать (отбросить мои изменения)"
+                            ))
+                            .clicked()
+                        {
                             match self.tab_mut().doc.reload() {
                                 Ok(()) => {
                                     if let Some(drafts) = &self.drafts {
                                         self.tabs[self.active].discard_draft(drafts);
                                     }
-                                    self.set_status("Reloaded from disk".into());
+                                    self.set_status(msg!(
+                                        "Reloaded from disk",
+                                        "Перечитан с диска"
+                                    ));
                                 }
-                                Err(e) => self.set_status(format!("Cannot reload: {e}")),
+                                Err(e) => self.set_status(msg!(
+                                    "Cannot reload: {e}",
+                                    "Не удалось перечитать: {e}"
+                                )),
                             }
                             keep_open = false;
                         }
-                        if ui.button("Keep my version").clicked() {
+                        if ui
+                            .button(tr!("Keep my version", "Оставить мою версию"))
+                            .clicked()
+                        {
                             self.tab_mut().doc.accept_disk_state();
                             keep_open = false;
                         }
@@ -706,22 +780,27 @@ impl MarkdowntownApp {
                 }
                 Dialog::Recover(draft) => {
                     let what = draft.path.as_deref().map_or_else(
-                        || "an untitled document".to_owned(),
-                        |p| format!("“{}”", p.display()),
+                        || tr!("an untitled document", "безымянном документе").to_owned(),
+                        |p| trf!("“{}”", "«{}»", p.display()),
                     );
-                    ui.heading("Recover unsaved changes?");
-                    ui.label(format!(
+                    ui.heading(tr!(
+                        "Recover unsaved changes?",
+                        "Восстановить несохранённые изменения?"
+                    ));
+                    ui.label(trf!(
                         "Markdowntown did not close properly. Unsaved changes to {what} \
                          from {} were found.",
+                        "Markdowntown завершился некорректно. Найдены несохранённые изменения \
+                         в {what}, сделанные {}.",
                         draft.age_description()
                     ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Recover").clicked() {
+                        if ui.button(tr!("Recover", "Восстановить")).clicked() {
                             self.recover(draft);
                             keep_open = false;
                         }
-                        if ui.button("Discard").clicked() {
+                        if ui.button(tr!("Discard", "Отбросить")).clicked() {
                             if let Some(drafts) = &self.drafts {
                                 drafts.remove(draft.path.as_deref(), draft.untitled);
                             }
@@ -736,14 +815,24 @@ impl MarkdowntownApp {
                                 .fit_to_exact_size(egui::vec2(64.0, 64.0)),
                         );
                         ui.heading("Markdowntown");
-                        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                        ui.label(trf!("Version {}", "Версия {}", env!("CARGO_PKG_VERSION")));
                         ui.add_space(4.0);
-                        ui.label(env!("CARGO_PKG_DESCRIPTION"));
+                        ui.label(tr!(
+                            env!("CARGO_PKG_DESCRIPTION"),
+                            "Редактор Markdown с живым превью и диаграммами Mermaid"
+                        ));
                         ui.add_space(8.0);
                         ui.label(format!("© 2026 {AUTHOR}"));
-                        ui.weak(format!("License: {}", env!("CARGO_PKG_LICENSE")));
+                        ui.weak(trf!(
+                            "License: {}",
+                            "Лицензия: {}",
+                            env!("CARGO_PKG_LICENSE")
+                        ));
                         ui.add_space(8.0);
-                        ui.label("New versions and release notes:");
+                        ui.label(tr!(
+                            "New versions and release notes:",
+                            "Новые версии и описание изменений:"
+                        ));
                         ui.hyperlink(RELEASES_URL);
                         ui.add_space(8.0);
                         if ui.button("OK").clicked() {
@@ -784,7 +873,10 @@ impl MarkdowntownApp {
         // Черновик остаётся до сохранения: следующие записи его обновят.
         tab.untitled_key = draft.untitled;
         tab.draft_written = Some((tab.doc.version(), draft.path.clone()));
-        self.set_status("Recovered unsaved changes".into());
+        self.set_status(msg!(
+            "Recovered unsaved changes",
+            "Несохранённые изменения восстановлены"
+        ));
     }
 
     // ----- Окно, меню, ввод -----
@@ -881,7 +973,7 @@ impl MarkdowntownApp {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop to open",
+                tr!("Drop to open", "Отпустите, чтобы открыть"),
                 egui::FontId::proportional(28.0),
                 egui::Color32::WHITE,
             );
@@ -890,16 +982,19 @@ impl MarkdowntownApp {
 
     fn menu(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("New (Ctrl+N)").clicked() {
+            ui.menu_button(tr!("File", "Файл"), |ui| {
+                if ui.button(tr!("New (Ctrl+N)", "Новый (Ctrl+N)")).clicked() {
                     self.request(Action::New);
                 }
-                if ui.button("Open… (Ctrl+O)").clicked() {
+                if ui
+                    .button(tr!("Open… (Ctrl+O)", "Открыть… (Ctrl+O)"))
+                    .clicked()
+                {
                     self.request(Action::Open(None));
                 }
-                ui.menu_button("Open Recent", |ui| {
+                ui.menu_button(tr!("Open Recent", "Недавние файлы"), |ui| {
                     if self.settings.recent_files.is_empty() {
-                        ui.weak("No recent files");
+                        ui.weak(tr!("No recent files", "Нет недавних файлов"));
                     }
                     let mut open = None;
                     for path in &self.settings.recent_files {
@@ -920,46 +1015,71 @@ impl MarkdowntownApp {
                     }
                     if !self.settings.recent_files.is_empty() {
                         ui.separator();
-                        if ui.button("Clear Recent").clicked() {
+                        if ui.button(tr!("Clear Recent", "Очистить список")).clicked()
+                        {
                             self.settings.recent_files.clear();
                         }
                     }
                 });
                 ui.separator();
-                if ui.button("Save (Ctrl+S, F2)").clicked() {
+                if ui
+                    .button(tr!("Save (Ctrl+S, F2)", "Сохранить (Ctrl+S, F2)"))
+                    .clicked()
+                {
                     self.save(false);
                 }
-                if ui.button("Save As… (Ctrl+Shift+S)").clicked() {
+                if ui
+                    .button(tr!(
+                        "Save As… (Ctrl+Shift+S)",
+                        "Сохранить как… (Ctrl+Shift+S)"
+                    ))
+                    .clicked()
+                {
                     self.save(true);
                 }
                 if ui
                     .add_enabled(
                         self.export.is_none(),
-                        egui::Button::new("Export HTML… (Ctrl+Shift+E)"),
+                        egui::Button::new(tr!(
+                            "Export HTML… (Ctrl+Shift+E)",
+                            "Экспорт в HTML… (Ctrl+Shift+E)"
+                        )),
                     )
                     .clicked()
                 {
                     self.export_html();
                 }
                 #[cfg(windows)]
-                ui.menu_button("File association", |ui| self.association_menu(ui));
+                ui.menu_button(
+                    tr!("File association", "Ассоциация файлов"),
+                    |ui| self.association_menu(ui),
+                );
                 ui.separator();
-                if ui.button("Close Tab (Ctrl+W)").clicked() {
+                if ui
+                    .button(tr!("Close Tab (Ctrl+W)", "Закрыть вкладку (Ctrl+W)"))
+                    .clicked()
+                {
                     self.request(Action::Close(vec![self.tab().id]));
                 }
                 if ui
-                    .add_enabled(self.tabs.len() > 1, egui::Button::new("Close Other Tabs"))
+                    .add_enabled(
+                        self.tabs.len() > 1,
+                        egui::Button::new(tr!("Close Other Tabs", "Закрыть другие вкладки")),
+                    )
                     .clicked()
                 {
                     self.request(Action::Close(self.other_tabs(self.active)));
                 }
-                if ui.button("Exit").clicked() {
+                if ui.button(tr!("Exit", "Выход")).clicked() {
                     self.request(Action::Exit);
                 }
             });
-            ui.menu_button("View", |ui| self.view_menu(ui));
-            ui.menu_button("Help", |ui| {
-                if ui.button("About Markdowntown").clicked() {
+            ui.menu_button(tr!("View", "Вид"), |ui| self.view_menu(ui));
+            ui.menu_button(tr!("Help", "Справка"), |ui| {
+                if ui
+                    .button(tr!("About Markdowntown", "О программе Markdowntown"))
+                    .clicked()
+                {
                     self.dialog = Some(Dialog::About);
                 }
             });
@@ -979,24 +1099,36 @@ impl MarkdowntownApp {
         let exe = match std::env::current_exe() {
             Ok(exe) => exe,
             Err(e) => {
-                ui.weak(format!("Unknown program path: {e}"));
+                ui.weak(trf!(
+                    "Unknown program path: {e}",
+                    "Путь к программе неизвестен: {e}"
+                ));
                 return;
             }
         };
         let loc = Location::user();
         let status = file_assoc::status(&loc, &exe);
         match &status {
-            Status::NotRegistered => ui.weak("Not registered for .md files"),
-            Status::Registered => ui.weak("Registered for .md and .markdown"),
+            Status::NotRegistered => ui.weak(tr!(
+                "Not registered for .md files",
+                "Не зарегистрирована для файлов .md"
+            )),
+            Status::Registered => ui.weak(tr!(
+                "Registered for .md and .markdown",
+                "Зарегистрирована для .md и .markdown"
+            )),
             Status::OtherCopy(path) => ui
-                .weak("Registered for another copy")
+                .weak(tr!(
+                    "Registered for another copy",
+                    "Зарегистрирована другая копия"
+                ))
                 .on_hover_text(path.display().to_string()),
         };
         ui.separator();
 
         let register_label = match status {
-            Status::OtherCopy(_) => "Register this copy",
-            _ => "Register for .md files",
+            Status::OtherCopy(_) => tr!("Register this copy", "Зарегистрировать эту копию"),
+            _ => tr!("Register for .md files", "Зарегистрировать для файлов .md"),
         };
         if status != Status::Registered && ui.button(register_label).clicked() {
             let result = file_assoc::register(&loc, &exe).and_then(|()| {
@@ -1004,61 +1136,119 @@ impl MarkdowntownApp {
                 file_assoc::open_default_apps_settings()
             });
             self.set_status(match result {
-                Ok(()) => {
-                    "Registered. Choose Markdowntown as the default app in Windows Settings".into()
-                }
-                Err(e) => format!("Cannot register file association: {e}"),
+                Ok(()) => msg!(
+                    "Registered. Choose Markdowntown as the default app in Windows Settings",
+                    "Зарегистрирована. Выберите Markdowntown приложением по умолчанию \
+                     в Параметрах Windows"
+                ),
+                Err(e) => msg!(
+                    "Cannot register file association: {e}",
+                    "Не удалось зарегистрировать ассоциацию файлов: {e}"
+                ),
             });
         }
         if status != Status::NotRegistered {
-            if ui.button("Choose default app…").clicked()
+            if ui
+                .button(tr!(
+                    "Choose default app…",
+                    "Выбрать приложение по умолчанию…"
+                ))
+                .clicked()
                 && let Err(e) = file_assoc::open_default_apps_settings()
             {
-                self.set_status(format!("Cannot open Windows Settings: {e}"));
+                self.set_status(msg!(
+                    "Cannot open Windows Settings: {e}",
+                    "Не удалось открыть Параметры Windows: {e}"
+                ));
             }
-            if ui.button("Unregister").clicked() {
+            if ui
+                .button(tr!("Unregister", "Отменить регистрацию"))
+                .clicked()
+            {
                 let result = file_assoc::unregister(&loc);
                 file_assoc::notify_shell();
                 self.set_status(match result {
-                    Ok(()) => "File association removed".into(),
-                    Err(e) => format!("Cannot remove file association: {e}"),
+                    Ok(()) => msg!("File association removed", "Ассоциация файлов удалена"),
+                    Err(e) => msg!(
+                        "Cannot remove file association: {e}",
+                        "Не удалось удалить ассоциацию файлов: {e}"
+                    ),
                 });
             }
         }
     }
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
+        let language_before = self.settings.language;
         let s = &mut self.settings;
-        ui.radio_value(&mut s.view_mode, ViewMode::Both, "Editor and preview");
-        ui.radio_value(&mut s.view_mode, ViewMode::Editor, "Editor only");
-        ui.radio_value(&mut s.view_mode, ViewMode::Preview, "Preview only");
+        ui.radio_value(
+            &mut s.view_mode,
+            ViewMode::Both,
+            tr!("Editor and preview", "Редактор и превью"),
+        );
+        ui.radio_value(
+            &mut s.view_mode,
+            ViewMode::Editor,
+            tr!("Editor only", "Только редактор"),
+        );
+        ui.radio_value(
+            &mut s.view_mode,
+            ViewMode::Preview,
+            tr!("Preview only", "Только превью"),
+        );
         ui.separator();
-        ui.checkbox(&mut s.show_outline, "Outline (Ctrl+Shift+O)");
-        ui.checkbox(&mut s.sync_scroll, "Synchronized scrolling");
-        ui.checkbox(&mut s.readable_width, "Readable width")
-            .on_hover_text("Preview text in a centered column of comfortable line length");
+        ui.checkbox(
+            &mut s.show_outline,
+            tr!("Outline (Ctrl+Shift+O)", "Оглавление (Ctrl+Shift+O)"),
+        );
+        ui.checkbox(
+            &mut s.sync_scroll,
+            tr!("Synchronized scrolling", "Синхронная прокрутка"),
+        );
+        ui.checkbox(
+            &mut s.readable_width,
+            tr!("Readable width", "Ширина для чтения"),
+        )
+        .on_hover_text(tr!(
+            "Preview text in a centered column of comfortable line length",
+            "Текст превью — колонкой по центру, строки удобной для чтения длины"
+        ));
         ui.separator();
 
-        ui.menu_button("Theme", |ui| {
+        ui.menu_button(tr!("Theme", "Тема"), |ui| {
             let before = s.theme;
-            ui.radio_value(&mut s.theme, Theme::System, "System");
-            ui.radio_value(&mut s.theme, Theme::Light, "Light");
-            ui.radio_value(&mut s.theme, Theme::Dark, "Dark");
+            ui.radio_value(&mut s.theme, Theme::System, tr!("System", "Системная"));
+            ui.radio_value(&mut s.theme, Theme::Light, tr!("Light", "Светлая"));
+            ui.radio_value(&mut s.theme, Theme::Dark, tr!("Dark", "Тёмная"));
             if s.theme != before {
                 ui.ctx().set_theme(s.theme.preference());
+            }
+        });
+        // Названия языков — на самих языках, пункт найдётся при любом языке интерфейса.
+        ui.menu_button(tr!("Language", "Язык"), |ui| {
+            for language in Language::ALL {
+                ui.radio_value(&mut s.language, language, language.native_name());
             }
         });
 
         // Подменю, а не ComboBox: выпадающий список внутри всплывающего меню egui
         // обрезается и показывает только первый пункт.
-        ui.menu_button("Editor font", |ui| {
-            ui.radio_value(&mut s.editor_font, None, fonts::BUILTIN_EDITOR_FONT);
+        ui.menu_button(tr!("Editor font", "Шрифт редактора"), |ui| {
+            ui.radio_value(
+                &mut s.editor_font,
+                None,
+                trf!(
+                    "{} (built-in)",
+                    "{} (встроенный)",
+                    fonts::BUILTIN_EDITOR_FONT
+                ),
+            );
             for font in fonts::available_editor_fonts() {
                 ui.radio_value(&mut s.editor_font, Some(font.to_owned()), font);
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Editor font size");
+            ui.label(tr!("Editor font size", "Размер шрифта редактора"));
             ui.add(
                 egui::DragValue::new(&mut s.editor_font_size)
                     .range(crate::style::EDITOR_FONT_SIZE_RANGE)
@@ -1066,7 +1256,27 @@ impl MarkdowntownApp {
                     .suffix(" pt"),
             );
         });
-        ui.weak("Whole UI: Ctrl+Plus / Ctrl+Minus / Ctrl+wheel, reset: Ctrl+0");
+        ui.weak(tr!(
+            "Whole UI: Ctrl+Plus / Ctrl+Minus / Ctrl+wheel, reset: Ctrl+0",
+            "Весь интерфейс: Ctrl+Plus / Ctrl+Minus / Ctrl+колесо, сброс: Ctrl+0"
+        ));
+        if self.settings.language != language_before {
+            self.switch_language(language_before);
+        }
+    }
+
+    /// Новый язык интерфейса (уже в `settings`). Нетронутое приветствие заменяется
+    /// приветствием на новом языке.
+    fn switch_language(&mut self, before: Language) {
+        let language = self.settings.language;
+        i18n::set_language(language);
+        log::info!("interface language: {language:?}");
+        for i in 0..self.tabs.len() {
+            if self.tabs[i].is_pristine() && self.tabs[i].doc.text == welcome(before) {
+                let id = self.new_tab_id();
+                self.tabs[i] = Tab::new(id, Document::new_untitled(welcome(language)));
+            }
+        }
     }
 
     /// Id вкладок, кроме вкладки `index` (Close Others).
@@ -1115,7 +1325,7 @@ impl MarkdowntownApp {
                             name.push_str(" •");
                         }
                         let hover = tab.doc.path().map_or_else(
-                            || "Not saved yet".to_owned(),
+                            || tr!("Not saved yet", "Ещё не сохранён").to_owned(),
                             |p| p.display().to_string(),
                         );
                         let response = ui
@@ -1131,11 +1341,14 @@ impl MarkdowntownApp {
                             close = Some(Close::One(tab.id));
                         }
                         response.context_menu(|ui| {
-                            if ui.button("Close").clicked() {
+                            if ui.button(tr!("Close", "Закрыть")).clicked() {
                                 close = Some(Close::One(tab.id));
                             }
                             if ui
-                                .add_enabled(count > 1, egui::Button::new("Close Others"))
+                                .add_enabled(
+                                    count > 1,
+                                    egui::Button::new(tr!("Close Others", "Закрыть другие")),
+                                )
                                 .clicked()
                             {
                                 close = Some(Close::Others(i));
@@ -1143,7 +1356,10 @@ impl MarkdowntownApp {
                             if ui
                                 .add_enabled(
                                     i + 1 < count,
-                                    egui::Button::new("Close Tabs to the Right"),
+                                    egui::Button::new(tr!(
+                                        "Close Tabs to the Right",
+                                        "Закрыть вкладки справа"
+                                    )),
                                 )
                                 .clicked()
                             {
@@ -1152,7 +1368,7 @@ impl MarkdowntownApp {
                         });
                         if ui
                             .add(egui::Button::new("×").frame(false))
-                            .on_hover_text("Close (Ctrl+W)")
+                            .on_hover_text(tr!("Close (Ctrl+W)", "Закрыть (Ctrl+W)"))
                             .clicked()
                         {
                             close = Some(Close::One(tab.id));
@@ -1234,7 +1450,7 @@ impl MarkdowntownApp {
             .size_range(120.0..=480.0)
             .show(ui, |ui| {
                 ui.add_space(4.0);
-                ui.strong("Outline");
+                ui.strong(tr!("Outline", "Оглавление"));
                 ui.separator();
                 let version = tab.doc.version();
                 let clicked = ui
@@ -1335,9 +1551,11 @@ impl MarkdowntownApp {
                     let message = links::open_local(&path);
                     self.set_status(message);
                 }
-                Target::Missing(path) => {
-                    self.set_status(format!("Cannot open link: {} not found", path.display()))
-                }
+                Target::Missing(path) => self.set_status(msg!(
+                    "Cannot open link: {} not found",
+                    "Не удалось открыть ссылку: {} не найден",
+                    path.display()
+                )),
             }
         }
     }
@@ -1348,7 +1566,10 @@ impl MarkdowntownApp {
         let tab = self.tab_mut();
         match links::find_anchor(&tab.doc.text, anchor) {
             Some(byte) => tab.jump_to(ctx, byte, editor_visible),
-            None => self.set_status(format!("No heading for #{anchor}")),
+            None => self.set_status(msg!(
+                "No heading for #{anchor}",
+                "Нет заголовка для #{anchor}"
+            )),
         }
     }
 
@@ -1460,7 +1681,9 @@ mod tests {
     /// они рисуются квадратиками. Добавляя новый символ в UI, допишите его сюда.
     /// Проверяются встроенные шрифты: системные запасные (`fonts.rs`) могут
     /// отсутствовать.
-    const UI_SYMBOLS: &[char] = &['⏶', '⏷', '×', '…', '−', '“', '”', '•', '©'];
+    const UI_SYMBOLS: &[char] = &[
+        '⏶', '⏷', '×', '…', '−', '“', '”', '«', '»', '—', '•', '©', 'ё', 'Ё',
+    ];
 
     #[test]
     fn elide_middle_keeps_both_ends() {
@@ -1479,9 +1702,11 @@ mod tests {
         let mut output = ctx.run_ui(Default::default(), |_| {});
         output.textures_delta.clear();
         let font = egui::FontId::proportional(14.0);
+        // Русский интерфейс: вся кириллица (ё и Ё — в UI_SYMBOLS).
         let missing: Vec<char> = UI_SYMBOLS
             .iter()
             .copied()
+            .chain('А'..='я')
             .filter(|&c| !ctx.fonts_mut(|f| f.has_glyph(&font, c)))
             .collect();
         assert!(missing.is_empty(), "no glyphs for {missing:?}");

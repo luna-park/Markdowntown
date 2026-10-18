@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Language;
+
 /// Ключ в хранилище eframe.
 pub const STORAGE_KEY: &str = "settings";
 /// Сколько недавних файлов помнить.
@@ -52,6 +54,8 @@ pub struct Settings {
     /// Превью — колонкой ограниченной ширины по центру (View → Readable width).
     pub readable_width: bool,
     pub theme: Theme,
+    /// Язык интерфейса (View → Language); в новых настройках — язык Windows.
+    pub language: Language,
     /// Недавние файлы, свежие первыми.
     pub recent_files: Vec<PathBuf>,
     /// Файлы, открытые во вкладках при закрытии, — открываются при следующем запуске.
@@ -73,6 +77,7 @@ impl Default for Settings {
             show_outline: false,
             readable_width: true,
             theme: Theme::default(),
+            language: Language::system(),
             recent_files: Vec::new(),
             session: Vec::new(),
             session_active: 0,

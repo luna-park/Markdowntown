@@ -10,6 +10,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
 use crate::document::Document;
+use crate::i18n::{tr, trf};
 use crate::math::MathCache;
 use crate::scroll_sync::PreviewGeometry;
 use crate::segment::{self, Segment, SegmentKind};
@@ -422,7 +423,7 @@ fn show_mermaid(
         Diagram::Ready(texture, size) => {
             let response = show_diagram_image(ui, &texture, size, false)
                 .on_hover_cursor(egui::CursorIcon::ZoomIn)
-                .on_hover_text("Click to enlarge");
+                .on_hover_text(tr!("Click to enlarge", "Нажмите, чтобы увеличить"));
             clicked = response.clicked();
             *shown = Some(key);
         }
@@ -431,7 +432,7 @@ fn show_mermaid(
                 ui.set_width(ui.available_width());
                 ui.colored_label(
                     ui.visuals().error_fg_color,
-                    format!("Mermaid error: {error}"),
+                    trf!("Mermaid error: {error}", "Ошибка Mermaid: {error}"),
                 );
                 if let Some(Diagram::Ready(texture, size)) = &previous {
                     show_diagram_image(ui, texture, *size, true);
@@ -449,7 +450,7 @@ fn show_mermaid(
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.weak("Rendering diagram…");
+                        ui.weak(tr!("Rendering diagram…", "Диаграмма рисуется…"));
                     });
                 });
             }

@@ -15,6 +15,7 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
 use crate::diagram::{DiagramRenderer, DiagramTheme, RenderControl};
+use crate::i18n::{self, Language, Message, count_in};
 use crate::segment;
 
 /// Префикс CSS-классов подсветки — чтобы не пересекались с классами страницы.
@@ -71,17 +72,37 @@ pub struct Exported {
 
 impl Exported {
     /// Предупреждения для строки статуса, например «1 diagram failed».
-    pub fn warnings(&self) -> Option<String> {
+    pub fn warnings(&self) -> Option<Message> {
+        let english = self.warnings_in(Language::English)?;
+        let text = self.warnings_in(i18n::language())?;
+        Some(Message { english, text })
+    }
+
+    fn warnings_in(&self, language: Language) -> Option<String> {
         let mut parts = Vec::new();
-        match self.failed_diagrams {
-            0 => {}
-            1 => parts.push("1 diagram failed".to_owned()),
-            n => parts.push(format!("{n} diagrams failed")),
+        if self.failed_diagrams > 0 {
+            parts.push(count_in(
+                language,
+                self.failed_diagrams as u64,
+                ["diagram failed", "diagrams failed"],
+                [
+                    "диаграмма не нарисована",
+                    "диаграммы не нарисованы",
+                    "диаграмм не нарисовано",
+                ],
+            ));
         }
-        match self.missing_images {
-            0 => {}
-            1 => parts.push("1 image not found".to_owned()),
-            n => parts.push(format!("{n} images not found")),
+        if self.missing_images > 0 {
+            parts.push(count_in(
+                language,
+                self.missing_images as u64,
+                ["image not found", "images not found"],
+                [
+                    "картинка не найдена",
+                    "картинки не найдены",
+                    "картинок не найдено",
+                ],
+            ));
         }
         (!parts.is_empty()).then(|| parts.join(", "))
     }
@@ -375,7 +396,7 @@ fn footnotes_to_end<'a>(events: Vec<Event<'a>>, order: &[String]) -> Vec<Event<'
 }
 
 /// Заголовок alert со значком — как в HTML у GitHub (`markdown-alert-title`); значок
-/// окрашивается цветом заголовка (`currentColor`).
+/// окрашивается цветом заголовка (`currentColor`). Текст — на языке интерфейса, как в превью.
 fn alert_title(kind: BlockQuoteKind) -> String {
     let id = match kind {
         BlockQuoteKind::Note => "NOTE",
@@ -394,7 +415,7 @@ fn alert_title(kind: BlockQuoteKind) -> String {
     );
     format!(
         "<p class=\"markdown-alert-title\">{icon}{}</p>\n",
-        alert.title
+        alert.title()
     )
 }
 
@@ -770,7 +791,10 @@ mod tests {
         assert_eq!(out.failed_diagrams, 1);
         assert!(out.html.contains("parse error &lt;here&gt;"));
         assert!(out.html.contains("fail &lt;x&gt;"));
-        assert_eq!(out.warnings().as_deref(), Some("1 diagram failed"));
+        assert_eq!(
+            out.warnings().map(|w| w.english).as_deref(),
+            Some("1 diagram failed")
+        );
     }
 
     #[test]
@@ -955,7 +979,11 @@ After.
             for (suffix, theme) in themes {
                 let out = to_html(&text, src.parent(), name, theme, &renderer);
                 let file = format!("{name}{suffix}.html");
-                println!("{file}: {} KB, {:?}", out.html.len() / 1024, out.warnings());
+                println!(
+                    "{file}: {} KB, {:?}",
+                    out.html.len() / 1024,
+                    out.warnings().map(|w| w.english)
+                );
                 std::fs::write(out_dir.join(file), out.html).unwrap();
             }
         }
