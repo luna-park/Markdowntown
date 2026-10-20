@@ -61,6 +61,9 @@ pub struct Editor {
     /// Id текстового поля: под ним egui хранит курсор и историю отмены —
     /// у каждой вкладки свой.
     text_id: Id,
+    /// Ещё не показан: у egui под `text_id` может лежать курсор прежней вкладки
+    /// с тем же id (память egui сохраняется между запусками) — забыть его.
+    fresh: bool,
 }
 
 impl Default for Editor {
@@ -74,6 +77,7 @@ impl Default for Editor {
             pending_offset: None,
             jump: None,
             text_id: Id::new(TEXT_ID),
+            fresh: true,
         }
     }
 }
@@ -119,6 +123,9 @@ impl Editor {
     ) -> EditorGeometry {
         let ctx = ui.ctx().clone();
         let text_id = self.text_id;
+        if std::mem::take(&mut self.fresh) {
+            ctx.data_mut(|d| d.remove::<TextEditState>(text_id));
+        }
 
         self.handle_search_shortcuts(&ctx, doc, text_id);
         if self.search.open {
@@ -233,6 +240,8 @@ impl Editor {
         state.cursor.set_char_range(Some(CCursorRange::one(cursor)));
         state.store(ctx, text_id);
         ctx.memory_mut(|m| m.request_focus(text_id));
+        // Курсор задан здесь — не сбрасывать его при первом показе.
+        self.fresh = false;
         self.jump = Some(byte);
     }
 
@@ -576,5 +585,34 @@ mod tests {
         // Байт внутри «б» (байты 1..3) — символ «б».
         assert_eq!(byte_to_char(text, 2), 1);
         assert_eq!(byte_to_char(text, 1000), 5);
+    }
+
+    /// Курсор под id текстового поля остаётся в памяти egui (она сохраняется между
+    /// запусками): редактор новой вкладки с тем же id не должен его подхватить.
+    #[test]
+    fn new_editor_forgets_old_cursor() {
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx, None);
+        let mut doc = Document::new_untitled("line\n".repeat(100));
+        let frame = |editor: &mut Editor, doc: &mut Document| {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| editor.show(ui, doc, None));
+            });
+            out.textures_delta.clear();
+        };
+        let cursor = |editor: &Editor| {
+            TextEditState::load(&ctx, editor.text_id).and_then(|s| s.cursor.char_range())
+        };
+
+        let mut old = Editor::for_tab(1);
+        old.jump_to(&ctx, &doc.text, 50);
+        frame(&mut old, &mut doc);
+        assert!(cursor(&old).is_some());
+        // Фокус в память не сохраняется — как после перезапуска.
+        ctx.memory_mut(|m| m.surrender_focus(old.text_id));
+
+        let mut new = Editor::for_tab(1);
+        frame(&mut new, &mut doc);
+        assert_eq!(cursor(&new), None);
     }
 }

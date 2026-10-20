@@ -63,7 +63,10 @@ impl Tab {
             editor: Editor::for_tab(id),
             preview: Preview::default(),
             scroll_sync: ScrollSync::default(),
-            pending_scroll: (None, None),
+            // Память egui (с прокруткой) сохраняется между запусками, а id вкладок
+            // каждый раз начинаются заново: без этого новая вкладка открылась бы там,
+            // где была прокручена прежняя вкладка с тем же id.
+            pending_scroll: (Some(0.0), Some(0.0)),
             outline: Outline::default(),
             top_byte: 0,
             outline_jump: None,
@@ -263,4 +266,56 @@ fn unique_key(id: u64) -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64);
     nanos ^ id.rotate_left(48)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Кадр «редактор + превью» без окна; смещения прокрутки панелей.
+    fn frame(ctx: &egui::Context, tab: &mut Tab, diagrams: &mut DiagramService) -> (f32, f32) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let mut offsets = (0.0, 0.0);
+        let id = tab.id;
+        let mut out = ctx.run_ui(input, |ui| {
+            let editor = egui::Panel::left("editor")
+                .exact_size(600.0)
+                .show(ui, |ui| ui.push_id(id, |ui| tab.show_editor(ui)).inner)
+                .inner;
+            let preview = egui::CentralPanel::default()
+                .show(ui, |ui| {
+                    ui.push_id(id, |ui| tab.show_preview(ui, diagrams)).inner
+                })
+                .inner;
+            offsets = (editor.offset, preview.offset);
+        });
+        out.textures_delta.clear();
+        offsets
+    }
+
+    /// Память egui (прокрутка) сохраняется между запусками, а id вкладок каждый раз
+    /// начинаются с 1: новая вкладка не должна открываться там, где была прокручена
+    /// прежняя вкладка с тем же id.
+    #[test]
+    fn new_tab_starts_at_top() {
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx, None);
+        let mut diagrams = DiagramService::new(&ctx);
+        let text = "Paragraph of text.\n\n".repeat(300);
+
+        let mut old = Tab::new(1, Document::new_untitled(text.clone()));
+        frame(&ctx, &mut old, &mut diagrams);
+        old.pending_scroll = (Some(1000.0), Some(1000.0));
+        let (editor, preview) = frame(&ctx, &mut old, &mut diagrams);
+        assert!(editor > 0.0 && preview > 0.0, "{editor} {preview}");
+
+        let mut new = Tab::new(1, Document::new_untitled(text));
+        assert_eq!(frame(&ctx, &mut new, &mut diagrams), (0.0, 0.0));
+    }
 }
