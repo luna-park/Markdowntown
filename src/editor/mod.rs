@@ -5,6 +5,7 @@ mod commands;
 mod highlight;
 mod lines;
 mod search;
+pub mod stats;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -65,6 +66,21 @@ pub struct Editor {
     /// Ещё не показан: у egui под `text_id` может лежать курсор прежней вкладки
     /// с тем же id (память egui сохраняется между запусками) — забыть его.
     fresh: bool,
+    /// Символов и слов в выделении: (версия документа, выделение, счётчики) — не
+    /// считать каждый кадр.
+    selection_counts: Option<SelectionCounts>,
+}
+
+/// Счётчики выделения: (версия документа, выделение, (символов, слов)).
+type SelectionCounts = ((u64, u64), Range<usize>, (usize, usize));
+
+/// Позиция курсора для строки статуса.
+pub struct CursorStatus {
+    /// Строка и столбец, с 1.
+    pub line: usize,
+    pub column: usize,
+    /// Выделено: (символов, слов).
+    pub selected: Option<(usize, usize)>,
 }
 
 impl Default for Editor {
@@ -79,6 +95,7 @@ impl Default for Editor {
             jump: None,
             text_id: Id::new(TEXT_ID),
             fresh: true,
+            selection_counts: None,
         }
     }
 }
@@ -187,6 +204,8 @@ impl Editor {
                     egui::vec2(gutter_width, ui.available_height()),
                     egui::Sense::hover(),
                 );
+                // Место под подложку текущей строки — до текста, чтобы она была под ним.
+                let line_bg = ui.painter().add(egui::Shape::Noop);
                 let output = egui::TextEdit::multiline(&mut doc.text)
                     .id(text_id)
                     .code_editor()
@@ -195,7 +214,17 @@ impl Editor {
                     .frame(egui::Frame::NONE)
                     .layouter(&mut layouter)
                     .show(ui);
-                paint_line_numbers(ui, gutter, &output, &font, palette.markup);
+                let current = current_line(&output, &doc.text);
+                if let Some((_, rows)) = current {
+                    let rect =
+                        egui::Rect::from_x_y_ranges(gutter.left()..=ui.max_rect().right(), rows);
+                    ui.painter().set(
+                        line_bg,
+                        egui::Shape::rect_filled(rect, 0.0, palette.current_line_bg),
+                    );
+                }
+                let current_number = current.map(|(number, _)| number);
+                paint_line_numbers(ui, gutter, &output, &font, &palette, current_number);
                 galley_top = output.galley_pos.y - content_top;
                 text_output = Some(output);
             });
@@ -231,6 +260,32 @@ impl Editor {
             }
         }
         geometry
+    }
+
+    /// Где курсор и что выделено. `None` — курсора ещё нет (в редактор не щёлкали).
+    pub fn cursor_status(&mut self, ctx: &egui::Context, doc: &Document) -> Option<CursorStatus> {
+        let state = TextEditState::load(ctx, self.text_id)?;
+        let range = state.cursor.char_range()?;
+        let text = &doc.text;
+        let (line, column) = stats::line_col(text, char_to_byte(text, range.primary.index.0));
+        let sel = selection(ctx, self.text_id, text)?;
+        let selected = (!sel.is_empty()).then(|| {
+            let version = doc.version();
+            match &self.selection_counts {
+                Some((v, r, counts)) if *v == version && *r == sel => *counts,
+                _ => {
+                    let selected = &text[sel.clone()];
+                    let counts = (selected.chars().count(), stats::word_count(selected));
+                    self.selection_counts = Some((version, sel, counts));
+                    counts
+                }
+            }
+        });
+        Some(CursorStatus {
+            line,
+            column,
+            selected,
+        })
     }
 
     /// Перейти к байту `byte`: курсор — туда, строка — вверху панели (оглавление).
@@ -574,13 +629,36 @@ fn selection(ctx: &egui::Context, text_id: Id, text: &str) -> Option<Range<usize
     Some(a.min(b)..a.max(b))
 }
 
-/// Номера логических строк в колонке слева (перенесённые строки не нумеруются).
+/// Строка с курсором (если ничего не выделено и редактор в фокусе): номер логической
+/// строки (с 1) и её границы по вертикали на экране — вместе с перенесёнными рядами.
+fn current_line(
+    output: &egui::text_edit::TextEditOutput,
+    text: &str,
+) -> Option<(usize, egui::Rangef)> {
+    let range = output.cursor_range?;
+    if !range.is_empty() || !output.response.response.has_focus() {
+        return None;
+    }
+    let byte = char_to_byte(text, range.primary.index.0);
+    let start = text[..byte].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[byte..].find('\n').map_or(text.len(), |i| byte + i);
+    let char_at = |b: usize| CCursor::new(byte_to_char(text, b));
+    let top = output.galley.pos_from_cursor(char_at(start)).min.y;
+    let bottom = output.galley.pos_from_cursor(char_at(end)).max.y;
+    let number = text[..start].bytes().filter(|&b| b == b'\n').count() + 1;
+    let y = output.galley_pos.y;
+    Some((number, egui::Rangef::new(y + top, y + bottom)))
+}
+
+/// Номера логических строк в колонке слева (перенесённые строки не нумеруются);
+/// номер строки с курсором — цветом текста.
 fn paint_line_numbers(
     ui: &egui::Ui,
     gutter: egui::Rect,
     output: &egui::text_edit::TextEditOutput,
     font: &egui::FontId,
-    color: egui::Color32,
+    palette: &Palette,
+    current: Option<usize>,
 ) {
     let clip = ui.clip_rect();
     let painter = ui.painter();
@@ -594,7 +672,11 @@ fn paint_line_numbers(
                 egui::Align2::RIGHT_TOP,
                 line.to_string(),
                 font.clone(),
-                color,
+                if current == Some(line) {
+                    palette.text
+                } else {
+                    palette.markup
+                },
             );
         }
         if row.ends_with_newline {

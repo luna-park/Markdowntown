@@ -46,6 +46,8 @@ pub struct Tab {
     pub outline_jump: Option<usize>,
     /// Сколько кадров уже длится переход (страховка от бесконечной подстройки).
     outline_jump_frames: u32,
+    /// Слов в документе: (версия документа, число) — для строки статуса.
+    words: Option<((u64, u64), usize)>,
 
     /// Ключ черновика, пока у документа нет пути (свой у каждой безымянной вкладки).
     pub untitled_key: Option<u64>,
@@ -71,6 +73,7 @@ impl Tab {
             top_byte: 0,
             outline_jump: None,
             outline_jump_frames: 0,
+            words: None,
             untitled_key: Some(unique_key(id)),
             draft_written: None,
             last_draft_time: Instant::now(),
@@ -94,6 +97,19 @@ impl Tab {
         self.last_disk_check = Instant::now()
             .checked_sub(DISK_CHECK_INTERVAL)
             .unwrap_or_else(Instant::now);
+    }
+
+    /// Слов в документе (пересчёт — только после правок).
+    pub fn word_count(&mut self) -> usize {
+        let version = self.doc.version();
+        match self.words {
+            Some((v, words)) if v == version => words,
+            _ => {
+                let words = crate::editor::stats::word_count(&self.doc.text);
+                self.words = Some((version, words));
+                words
+            }
+        }
     }
 
     // ----- Черновик восстановления -----

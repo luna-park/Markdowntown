@@ -40,6 +40,8 @@ pub struct Palette {
     pub list_marker: Color32,
     pub match_bg: Color32,
     pub current_match_bg: Color32,
+    /// Подложка строки с курсором (рисует редактор, не подсветка).
+    pub current_line_bg: Color32,
 }
 
 impl Palette {
@@ -57,6 +59,7 @@ impl Palette {
                 list_marker: Color32::from_rgb(0xd7, 0xba, 0x7d),
                 match_bg: Color32::from_rgba_unmultiplied(0xff, 0xd7, 0x00, 0x40),
                 current_match_bg: Color32::from_rgba_unmultiplied(0xff, 0x8c, 0x00, 0x90),
+                current_line_bg: Color32::from_white_alpha(8),
             }
         } else {
             Self {
@@ -71,6 +74,7 @@ impl Palette {
                 list_marker: Color32::from_rgb(0x95, 0x6b, 0x00),
                 match_bg: Color32::from_rgba_unmultiplied(0xff, 0xd7, 0x00, 0x70),
                 current_match_bg: Color32::from_rgba_unmultiplied(0xff, 0x8c, 0x00, 0xb0),
+                current_line_bg: Color32::from_black_alpha(10),
             }
         }
     }

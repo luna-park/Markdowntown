@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::diagram::DiagramService;
 use crate::document::Document;
+use crate::editor;
 use crate::fonts;
 use crate::i18n::{self, Language, Message, msg, tr, trf};
 use crate::links::{self, Target};
@@ -60,6 +61,42 @@ fn welcome(language: Language) -> &'static str {
 
 /// Название и версия в заголовке окна — по ним проще разбирать сообщения об ошибках.
 pub const APP_TITLE: &str = concat!("Markdowntown v", env!("CARGO_PKG_VERSION"));
+
+/// Id поля ввода в окне «Перейти к строке».
+const GOTO_LINE_ID: &str = "goto_line_input";
+
+/// Число слов и время чтения для строки статуса.
+fn words_label(words: usize) -> String {
+    let count = i18n::count(words as u64, ["word", "words"], ["слово", "слова", "слов"]);
+    match editor::stats::reading_minutes(words) {
+        0 => count,
+        minutes => trf!(
+            "{count}, {minutes} min read",
+            "{count}, {minutes} мин чтения"
+        ),
+    }
+}
+
+/// Позиция курсора и выделение для строки статуса.
+fn cursor_label(cursor: &editor::CursorStatus) -> String {
+    let (line, column) = (cursor.line, cursor.column);
+    let position = trf!("Ln {line}, Col {column}", "Стр. {line}, стлб {column}");
+    match cursor.selected {
+        None => position,
+        Some((chars, words)) => {
+            let chars = i18n::count(
+                chars as u64,
+                ["character", "characters"],
+                ["символ", "символа", "символов"],
+            );
+            let words = i18n::count(words as u64, ["word", "words"], ["слово", "слова", "слов"]);
+            trf!(
+                "{position} ({chars}, {words} selected)",
+                "{position} (выделено: {chars}, {words})"
+            )
+        }
+    }
+}
 
 /// Минимальная ширина панели редактора, px.
 const MIN_EDITOR_WIDTH: f32 = 200.0;
@@ -222,6 +259,8 @@ pub struct MarkdowntownApp {
     /// Ссылка под курсором в превью (адрес) и куда она ведёт — для строки статуса.
     /// Описание считается один раз на ссылку, а не каждый кадр.
     link_hover: Option<(String, (String, bool))>,
+    /// Открыто окно «Перейти к строке» (Ctrl+G): введённый номер.
+    goto_line: Option<String>,
 }
 
 impl MarkdowntownApp {
@@ -271,6 +310,7 @@ impl MarkdowntownApp {
             export: None,
             inbox,
             link_hover: None,
+            goto_line: None,
         };
         app.restore_session();
         for path in files {
@@ -901,6 +941,7 @@ impl MarkdowntownApp {
         let close = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
         let next = KeyboardShortcut::new(Modifiers::COMMAND, Key::Tab);
         let prev = KeyboardShortcut::new(shift, Key::Tab);
+        let goto_line = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
         let next_page = KeyboardShortcut::new(Modifiers::COMMAND, Key::PageDown);
         let prev_page = KeyboardShortcut::new(Modifiers::COMMAND, Key::PageUp);
         let consume = |s: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(s));
@@ -920,6 +961,8 @@ impl MarkdowntownApp {
             self.export_html();
         } else if consume(&close) {
             self.request(Action::Close(vec![self.tab().id]));
+        } else if consume(&goto_line) {
+            self.open_goto_line(ctx);
         } else if consume(&prev) || consume(&prev_page) {
             self.cycle_tab(-1);
         } else if consume(&next) || consume(&next_page) {
@@ -1179,6 +1222,14 @@ impl MarkdowntownApp {
     }
 
     fn view_menu(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button(tr!("Go to Line… (Ctrl+G)", "Перейти к строке… (Ctrl+G)"))
+            .clicked()
+        {
+            self.open_goto_line(ui.ctx());
+            ui.close();
+        }
+        ui.separator();
         let language_before = self.settings.language;
         let s = &mut self.settings;
         ui.radio_value(
@@ -1410,31 +1461,83 @@ impl MarkdowntownApp {
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            match &self.link_hover {
-                // Пока курсор над ссылкой — куда она ведёт (вместо сообщения).
-                Some((_, (description, missing))) => {
-                    // Место — за вычетом правой части (кодировка, окончания строк).
-                    let char_width = ui.text_style_height(&egui::TextStyle::Body) * 0.5;
-                    let max_chars = ((ui.available_width() - 160.0) / char_width).max(20.0);
-                    let text = elide_middle(description, max_chars as usize);
-                    if *missing {
-                        ui.colored_label(ui.visuals().error_fg_color, text);
-                    } else {
-                        ui.label(text);
+        let editor_visible = self.settings.view_mode != ViewMode::Preview;
+        // Сначала правая часть (справа налево), в оставшемся месте — сообщение.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let tab = &mut self.tabs[self.active];
+            let format = tab.doc.format();
+            ui.label(format.line_ending.label());
+            ui.separator();
+            ui.label(if format.bom { "UTF-8 BOM" } else { "UTF-8" });
+            ui.separator();
+            ui.label(words_label(tab.word_count()));
+            if editor_visible && let Some(cursor) = tab.editor.cursor_status(ui.ctx(), &tab.doc) {
+                ui.separator();
+                ui.label(cursor_label(&cursor));
+            }
+
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                match &self.link_hover {
+                    // Пока курсор над ссылкой — куда она ведёт (вместо сообщения).
+                    Some((_, (description, missing))) => {
+                        let char_width = ui.text_style_height(&egui::TextStyle::Body) * 0.5;
+                        let max_chars = (ui.available_width() / char_width).max(20.0);
+                        let text = elide_middle(description, max_chars as usize);
+                        if *missing {
+                            ui.colored_label(ui.visuals().error_fg_color, text);
+                        } else {
+                            ui.label(text);
+                        }
+                    }
+                    None => {
+                        ui.add(egui::Label::new(&self.status).truncate());
                     }
                 }
-                None => {
-                    ui.label(&self.status);
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let format = self.tab().doc.format();
-                ui.label(format.line_ending.label());
-                ui.separator();
-                ui.label(if format.bom { "UTF-8 BOM" } else { "UTF-8" });
             });
         });
+    }
+
+    fn open_goto_line(&mut self, ctx: &egui::Context) {
+        self.goto_line = Some(String::new());
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(GOTO_LINE_ID)));
+    }
+
+    /// Окно «Перейти к строке»: Enter — переход (курсор редактора на начало строки,
+    /// превью — к её блоку), Esc или щелчок мимо — закрыть.
+    fn goto_line_window(&mut self, ctx: &egui::Context) {
+        let Some(input) = &mut self.goto_line else {
+            return;
+        };
+        let lines = editor::stats::line_count(&self.tabs[self.active].doc.text);
+        let mut close = false;
+        let mut target = None;
+        egui::Window::new(tr!("Go to Line", "Перейти к строке"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 60.0))
+            .show(ctx, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(input)
+                        .id(egui::Id::new(GOTO_LINE_ID))
+                        .hint_text(trf!("1 to {lines}", "от 1 до {lines}"))
+                        .desired_width(160.0),
+                );
+                if response.lost_focus() {
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        target = input.trim().parse::<usize>().ok();
+                    }
+                    close = true;
+                }
+            });
+        if close {
+            self.goto_line = None;
+        }
+        if let Some(line) = target {
+            let editor_visible = self.settings.view_mode != ViewMode::Preview;
+            let tab = &mut self.tabs[self.active];
+            let byte = editor::stats::line_start(&tab.doc.text, line);
+            tab.jump_to(ctx, byte, editor_visible);
+        }
     }
 
     /// Панель оглавления слева; клик — переход к заголовку в редакторе и превью.
@@ -1603,6 +1706,7 @@ impl eframe::App for MarkdowntownApp {
         self.update_link_hover(&ctx);
         self.handle_links(&ctx);
         handle_wheel_zoom(&ctx);
+        self.goto_line_window(&ctx);
         self.show_dialog(&ctx);
 
         self.check_disk(&ctx);
