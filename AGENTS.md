@@ -28,7 +28,8 @@ cargo fmt             # форматирование
 и `cargo-audit` (`cargo install cargo-audit --locked`). Аудит падает только на известных
 уязвимостях (база RustSec, нужна сеть; без сети — `-SkipAudit`); предупреждения
 «unmaintained» — у транзитивных `bincode`, `yaml-rust` (через `syntect`), `rustybuzz`,
-`ttf-parser` (через `resvg`) — уходят с обновлением этих крейтов.
+`ttf-parser` (через `resvg`), `zbus_names` / `zvariant` / `zvariant_derive` (D-Bus для Linux,
+есть в `Cargo.lock`, в Windows-сборку не входят) — уходят с обновлением этих крейтов.
 Иконка: исходник `assets/icon.svg`, файлы `icon.ico` / `icon-256.png` генерируются
 `cargo test generate_icon_files -- --ignored` и коммитятся.
 

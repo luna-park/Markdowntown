@@ -1,6 +1,6 @@
 [package]
 name = "markdowntown"
-version = "1.7.0"
+version = "1.8.0"
 edition = "2024"
 description = "Markdown editor with live preview and Mermaid diagrams"
 license = "MIT OR Apache-2.0"
