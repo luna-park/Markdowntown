@@ -132,16 +132,30 @@ pub fn continue_list(text: &str, cursor: usize) -> Option<Edit> {
     })
 }
 
-struct ListPrefix {
-    /// Длина разметки в начале строки (отступ + маркер + пробел).
-    len: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefixKind {
+    Quote,
+    Bullet,
+    Ordered,
+}
+
+pub struct ListPrefix {
+    pub kind: PrefixKind,
+    /// Длина разметки в начале строки (отступ + маркер + пробел; у маркированного
+    /// пункта задачи — и флажок).
+    pub len: usize,
     /// Длина отступа.
-    indent: usize,
+    pub indent: usize,
+    /// Конец маркера с пробелом — колонка, с которой начинается содержимое пункта
+    /// (флажок задачи — уже содержимое). Под неё выравниваются вложенные пункты.
+    pub marker_end: usize,
+    /// Позиция флажка задачи `[ ]` / `[x]` в строке.
+    pub task: Option<usize>,
     /// Разметка для следующей строки.
     next: String,
 }
 
-fn list_prefix(line: &str) -> Option<ListPrefix> {
+pub fn list_prefix(line: &str) -> Option<ListPrefix> {
     let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
     let rest = &line[indent..];
     let ws = &line[..indent];
@@ -159,8 +173,11 @@ fn list_prefix(line: &str) -> Option<ListPrefix> {
             marker.push(' ');
         }
         return Some(ListPrefix {
+            kind: PrefixKind::Quote,
             len: indent + quote_len,
             indent,
+            marker_end: indent + quote_len,
+            task: None,
             next: format!("{ws}{marker}"),
         });
     }
@@ -171,15 +188,21 @@ fn list_prefix(line: &str) -> Option<ListPrefix> {
             for task in ["[ ] ", "[x] ", "[X] "] {
                 if after.starts_with(task) {
                     return Some(ListPrefix {
+                        kind: PrefixKind::Bullet,
                         len: indent + bullet.len() + task.len(),
                         indent,
+                        marker_end: indent + bullet.len(),
+                        task: Some(indent + bullet.len()),
                         next: format!("{ws}{bullet}[ ] "),
                     });
                 }
             }
             return Some(ListPrefix {
+                kind: PrefixKind::Bullet,
                 len: indent + bullet.len(),
                 indent,
+                marker_end: indent + bullet.len(),
+                task: None,
                 next: format!("{ws}{bullet}"),
             });
         }
@@ -194,9 +217,19 @@ fn list_prefix(line: &str) -> Option<ListPrefix> {
         {
             let n: u64 = rest[..digits].parse().ok()?;
             let delim = delim? as char;
+            let marker_end = indent + digits + 2;
+            // Флажок задачи бывает и в нумерованном пункте; продолжение списка его
+            // не повторяет, поэтому в `len` он не входит.
+            let task = ["[ ] ", "[x] ", "[X] "]
+                .iter()
+                .any(|t| line[marker_end..].starts_with(t))
+                .then_some(marker_end);
             return Some(ListPrefix {
-                len: indent + digits + 2,
+                kind: PrefixKind::Ordered,
+                len: marker_end,
                 indent,
+                marker_end,
+                task,
                 next: format!("{ws}{}{delim} ", n + 1),
             });
         }

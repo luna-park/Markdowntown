@@ -1,8 +1,9 @@
 //! Редактор Markdown: подсветка, номера строк, поиск и замена, команды форматирования,
-//! продолжение списков.
+//! продолжение списков, команды над строками.
 
 mod commands;
 mod highlight;
+mod lines;
 mod search;
 
 use std::ops::Range;
@@ -454,16 +455,51 @@ impl Editor {
         );
     }
 
-    /// Горячие клавиши форматирования и Enter в списках. Обрабатываются до `TextEdit`,
-    /// чтобы он не получил эти нажатия.
+    /// Горячие клавиши форматирования, команды над строками и Enter в списках.
+    /// Обрабатываются до `TextEdit`, чтобы он не получил эти нажатия.
     fn handle_editing_keys(&mut self, ctx: &egui::Context, doc: &mut Document, text_id: Id) {
         let Some(sel) = selection(ctx, text_id, &doc.text) else {
             return;
         };
         let shortcut = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
+        let shift_shortcut =
+            |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
+        let alt = |key| KeyboardShortcut::new(Modifiers::ALT, key);
         let consume = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
+        let text = doc.text.as_str();
 
-        let edit = if consume(shortcut(Key::B)) {
+        // Ctrl+Shift+… — раньше Ctrl+…: egui сопоставляет сочетания без учёта лишнего Shift.
+        // Ctrl+0 (обычная строка вместо заголовка) не занимаем — это сброс масштаба;
+        // повторное Ctrl+N на заголовке уровня N делает его обычной строкой.
+        let edit = if consume(shift_shortcut(Key::D)) {
+            Some(lines::duplicate_lines(text, sel))
+        } else if consume(shift_shortcut(Key::K)) {
+            Some(lines::delete_lines(text, sel))
+        } else if consume(alt(Key::ArrowUp)) {
+            lines::move_lines(text, sel, true)
+        } else if consume(alt(Key::ArrowDown)) {
+            lines::move_lines(text, sel, false)
+        } else if let Some(level) = HEADING_KEYS.iter().position(|&key| consume(shortcut(key))) {
+            lines::set_heading(text, sel, level + 1)
+        } else if consume(shortcut(Key::Enter)) {
+            lines::toggle_task(text, sel)
+        } else if let Some(back) = tab_press(ctx) {
+            let edit = if back {
+                lines::outdent(text, sel.clone())
+            } else {
+                lines::indent(text, sel.clone())
+            };
+            // Иначе `TextEdit` заменил бы выделение на несколько строк табуляцией.
+            if edit.is_some() || lines::is_multiline(text, &sel) {
+                let modifiers = if back {
+                    Modifiers::SHIFT
+                } else {
+                    Modifiers::NONE
+                };
+                ctx.input_mut(|i| i.consume_key(modifiers, Key::Tab));
+            }
+            edit
+        } else if consume(shortcut(Key::B)) {
             Some(commands::toggle_wrap(&doc.text, sel, "**"))
         } else if consume(shortcut(Key::I)) {
             Some(commands::toggle_wrap(&doc.text, sel, "*"))
@@ -484,6 +520,29 @@ impl Editor {
             apply_edit(ctx, text_id, doc, edit);
         }
     }
+}
+
+/// Ctrl+1…6 — заголовки H1–H6.
+const HEADING_KEYS: [Key; 6] = [
+    Key::Num1,
+    Key::Num2,
+    Key::Num3,
+    Key::Num4,
+    Key::Num5,
+    Key::Num6,
+];
+
+/// Нажат Tab без модификаторов (`Some(false)`) или Shift+Tab (`Some(true)`).
+fn tab_press(ctx: &egui::Context) -> Option<bool> {
+    ctx.input(|i| {
+        if !i.key_pressed(Key::Tab) {
+            None
+        } else if i.modifiers.is_none() {
+            Some(false)
+        } else {
+            i.modifiers.shift_only().then_some(true)
+        }
+    })
 }
 
 /// Применяет правку как отдельный шаг отмены и ставит выделение.
@@ -614,5 +673,64 @@ mod tests {
         let mut new = Editor::for_tab(1);
         frame(&mut new, &mut doc);
         assert_eq!(cursor(&new), None);
+    }
+
+    /// Горячие клавиши команд над строками доходят до редактора через egui и не
+    /// достаются `TextEdit` (он вставил бы табуляцию или сдвинул курсор).
+    #[test]
+    fn line_shortcuts_through_egui() {
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx, None);
+        let mut doc = Document::new_untitled("a\n- b\nc");
+        let mut editor = Editor::for_tab(1);
+        let press = |editor: &mut Editor, doc: &mut Document, key: Key, modifiers: Modifiers| {
+            let events = vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+            ];
+            let release = vec![egui::Event::ModifiersChanged(Modifiers::NONE)];
+            for events in [events, release] {
+                let input = egui::RawInput {
+                    events,
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| editor.show(ui, doc, None));
+                });
+                out.textures_delta.clear();
+            }
+        };
+        let ctrl_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+
+        // Курсор в конце «- b», фокус — в редакторе.
+        editor.jump_to(&ctx, &doc.text, 5);
+        press(&mut editor, &mut doc, Key::F24, Modifiers::NONE);
+
+        press(&mut editor, &mut doc, Key::Tab, Modifiers::NONE);
+        assert_eq!(doc.text, "a\n  - b\nc");
+        press(&mut editor, &mut doc, Key::Tab, Modifiers::SHIFT);
+        assert_eq!(doc.text, "a\n- b\nc");
+        press(&mut editor, &mut doc, Key::Enter, Modifiers::COMMAND);
+        assert_eq!(doc.text, "a\n- [ ] b\nc");
+        press(&mut editor, &mut doc, Key::ArrowDown, Modifiers::ALT);
+        assert_eq!(doc.text, "a\nc\n- [ ] b");
+        press(&mut editor, &mut doc, Key::ArrowUp, Modifiers::ALT);
+        assert_eq!(doc.text, "a\n- [ ] b\nc");
+        press(&mut editor, &mut doc, Key::D, ctrl_shift);
+        assert_eq!(doc.text, "a\n- [ ] b\n- [ ] b\nc");
+        press(&mut editor, &mut doc, Key::K, ctrl_shift);
+        assert_eq!(doc.text, "a\n- [ ] b\nc");
+        // Курсор — на строке, вставшей на место удалённой копии.
+        press(&mut editor, &mut doc, Key::Num3, Modifiers::COMMAND);
+        assert_eq!(doc.text, "a\n- [ ] b\n### c");
+        // Отмена — по шагу на команду.
+        press(&mut editor, &mut doc, Key::Z, Modifiers::COMMAND);
+        assert_eq!(doc.text, "a\n- [ ] b\nc");
     }
 }

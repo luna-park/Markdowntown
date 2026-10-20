@@ -44,6 +44,11 @@ falls back to software rendering.
 | Find / Replace | Ctrl+F / Ctrl+H |
 | Zoom the whole UI | Ctrl+Plus / Ctrl+Minus or Ctrl+mouse wheel; Ctrl+0 resets |
 | Continue a list or quote | Enter at the end of an item (Enter on an empty item ends the list) |
+| Indent / outdent a list item or the selected lines | Tab / Shift+Tab |
+| Move the line (or selected lines) up / down | Alt+Up / Alt+Down |
+| Duplicate / delete the line | Ctrl+Shift+D / Ctrl+Shift+K |
+| Heading level 1–6 (again on the same level: plain text) | Ctrl+1 … Ctrl+6 |
+| Check or uncheck a task (a plain list item becomes a task) | Ctrl+Enter |
 
 Click a diagram in the preview to open it in a zoomable window. Links to other Markdown
 files open them in a tab, and links like `#section` jump to the heading.
