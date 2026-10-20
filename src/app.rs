@@ -259,8 +259,9 @@ pub struct MarkdowntownApp {
     /// Ссылка под курсором в превью (адрес) и куда она ведёт — для строки статуса.
     /// Описание считается один раз на ссылку, а не каждый кадр.
     link_hover: Option<(String, (String, bool))>,
-    /// Открыто окно «Перейти к строке» (Ctrl+G): введённый номер.
-    goto_line: Option<String>,
+    /// Открыто окно «Перейти к строке» (Ctrl+G): введённый номер и кадр, в котором
+    /// окно открыли (щелчок, открывший его из меню, — не «щелчок мимо»).
+    goto_line: Option<(String, u64)>,
 }
 
 impl MarkdowntownApp {
@@ -1498,20 +1499,22 @@ impl MarkdowntownApp {
     }
 
     fn open_goto_line(&mut self, ctx: &egui::Context) {
-        self.goto_line = Some(String::new());
+        self.goto_line = Some((String::new(), ctx.cumulative_pass_nr()));
         ctx.memory_mut(|m| m.request_focus(egui::Id::new(GOTO_LINE_ID)));
     }
 
-    /// Окно «Перейти к строке»: Enter — переход (курсор редактора на начало строки,
-    /// превью — к её блоку), Esc или щелчок мимо — закрыть.
+    /// Окно «Перейти к строке»: Enter или «Перейти» — курсор редактора на начало
+    /// строки, превью — к её блоку. Закрывают «Отмена», ×, Esc и щелчок мимо окна.
     fn goto_line_window(&mut self, ctx: &egui::Context) {
-        let Some(input) = &mut self.goto_line else {
+        let Some((input, opened)) = &mut self.goto_line else {
             return;
         };
         let lines = editor::stats::line_count(&self.tabs[self.active].doc.text);
-        let mut close = false;
-        let mut target = None;
-        egui::Window::new(tr!("Go to Line", "Перейти к строке"))
+        let line = input.trim().parse::<usize>().ok().filter(|&n| n >= 1);
+        let mut open = true;
+        let (mut go, mut cancel) = (false, false);
+        let window = egui::Window::new(tr!("Go to Line", "Перейти к строке"))
+            .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 60.0))
@@ -1519,20 +1522,40 @@ impl MarkdowntownApp {
                 let response = ui.add(
                     egui::TextEdit::singleline(input)
                         .id(egui::Id::new(GOTO_LINE_ID))
-                        .hint_text(trf!("1 to {lines}", "от 1 до {lines}"))
-                        .desired_width(160.0),
+                        .hint_text(trf!(
+                            "Line number, 1 to {lines}",
+                            "Номер строки, от 1 до {lines}"
+                        ))
+                        .desired_width(220.0),
                 );
-                if response.lost_focus() {
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        target = input.trim().parse::<usize>().ok();
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if line.is_some() {
+                        go = true;
+                    } else {
+                        response.request_focus();
                     }
-                    close = true;
                 }
+                ui.horizontal(|ui| {
+                    go |= ui
+                        .add_enabled(line.is_some(), egui::Button::new(tr!("Go", "Перейти")))
+                        .clicked();
+                    cancel = ui.button(tr!("Cancel", "Отмена")).clicked();
+                });
             });
-        if close {
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let clicked_outside = ctx.cumulative_pass_nr() > *opened
+            && window.is_some_and(|w| {
+                ctx.input(|i| {
+                    i.pointer.any_click()
+                        && i.pointer
+                            .interact_pos()
+                            .is_some_and(|p| !w.response.rect.contains(p))
+                })
+            });
+        if go || cancel || escape || clicked_outside || !open {
             self.goto_line = None;
         }
-        if let Some(line) = target {
+        if go && let Some(line) = line {
             let editor_visible = self.settings.view_mode != ViewMode::Preview;
             let tab = &mut self.tabs[self.active];
             let byte = editor::stats::line_start(&tab.doc.text, line);
