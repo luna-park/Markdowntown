@@ -21,6 +21,7 @@ A simple **Markdown** editor with a live _preview_.
 - Each file opens in its own tab: close with **Ctrl+W**, switch with **Ctrl+Tab**
 - Format with **Ctrl+B**, *Ctrl+I*, `Ctrl+E`, links with Ctrl+K
 - Find with Ctrl+F, replace with Ctrl+H
+- New line inside a paragraph: end the line with two spaces (the editor highlights them)
 - Zoom the whole UI with Ctrl+Plus / Ctrl+Minus or Ctrl+mouse wheel
 - Interface language: View → Language
 - [x] GitHub-flavored Markdown
@@ -40,6 +41,7 @@ const WELCOME_RU: &str = r#"# Markdowntown
 - Каждый файл — в своей вкладке: закрыть — **Ctrl+W**, переключиться — **Ctrl+Tab**
 - Оформление — **Ctrl+B**, *Ctrl+I*, `Ctrl+E`, ссылка — Ctrl+K
 - Поиск — Ctrl+F, замена — Ctrl+H
+- Перенос строки внутри абзаца — два пробела в конце строки (редактор их подсвечивает)
 - Масштаб интерфейса — Ctrl+Plus / Ctrl+Minus или Ctrl+колесо мыши
 - Язык интерфейса — Вид → Язык (View → Language)
 - [x] Markdown в варианте GitHub

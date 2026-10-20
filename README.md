@@ -54,6 +54,14 @@ falls back to software rendering.
 Click a diagram in the preview to open it in a zoomable window. Links to other Markdown
 files open them in a tab, and links like `#section` jump to the heading.
 
+## Writing tips
+
+- **A new line inside a paragraph.** In Markdown a single line break does not start a new
+  line: the lines are joined into one paragraph. To break the line, end it with **two
+  spaces** (or a backslash `\`). Trailing spaces are invisible, so the editor shows them on
+  a tinted background — only where they really make a line break.
+- **A new paragraph** starts after a blank line.
+
 ## Opening .md files with Markdowntown
 
 **File → File association → Register for .md files** adds Markdowntown to the

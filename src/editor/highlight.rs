@@ -23,6 +23,8 @@ const ITEM: u16 = 1 << 9;
 const TABLE: u16 = 1 << 10;
 const TASK: u16 = 1 << 11;
 const HTML: u16 = 1 << 12;
+/// Жёсткий перенос: два пробела (или `\`) в конце строки абзаца — иначе их не видно.
+const HARD_BREAK: u16 = 1 << 13;
 /// Элементы, у которых символы вне содержимого — разметка.
 const MARKUP_CONTAINERS: u16 = HEADING | STRONG | EMPH | STRIKE | LINK | QUOTE | ITEM | TABLE;
 
@@ -40,6 +42,8 @@ pub struct Palette {
     pub list_marker: Color32,
     pub match_bg: Color32,
     pub current_match_bg: Color32,
+    /// Подложка пробелов жёсткого переноса в конце строки.
+    pub hard_break_bg: Color32,
     /// Подложка строки с курсором (рисует редактор, не подсветка).
     pub current_line_bg: Color32,
 }
@@ -59,6 +63,7 @@ impl Palette {
                 list_marker: Color32::from_rgb(0xd7, 0xba, 0x7d),
                 match_bg: Color32::from_rgba_unmultiplied(0xff, 0xd7, 0x00, 0x40),
                 current_match_bg: Color32::from_rgba_unmultiplied(0xff, 0x8c, 0x00, 0x90),
+                hard_break_bg: Color32::from_rgba_unmultiplied(0xd7, 0xba, 0x7d, 0x50),
                 current_line_bg: Color32::from_white_alpha(8),
             }
         } else {
@@ -74,6 +79,7 @@ impl Palette {
                 list_marker: Color32::from_rgb(0x95, 0x6b, 0x00),
                 match_bg: Color32::from_rgba_unmultiplied(0xff, 0xd7, 0x00, 0x70),
                 current_match_bg: Color32::from_rgba_unmultiplied(0xff, 0x8c, 0x00, 0xb0),
+                hard_break_bg: Color32::from_rgba_unmultiplied(0x95, 0x6b, 0x00, 0x40),
                 current_line_bg: Color32::from_black_alpha(10),
             }
         }
@@ -123,6 +129,11 @@ fn classify(text: &str) -> Vec<u16> {
             }
             Event::TaskListMarker(_) => mark(range, TASK),
             Event::Html(_) | Event::InlineHtml(_) => mark(range, HTML),
+            // Диапазон — пробелы (или `\`) и перевод строки; сам перевод не размечаем.
+            Event::HardBreak => {
+                let end = range.end - usize::from(text[range.clone()].ends_with('\n'));
+                mark(range.start..end, HARD_BREAK);
+            }
             _ => {}
         }
     }
@@ -146,7 +157,10 @@ fn format_for(key: StyleKey, font: &FontId, p: &Palette) -> TextFormat {
         ..Default::default()
     };
 
-    if f & CODE_BLOCK != 0 {
+    if f & HARD_BREAK != 0 {
+        fmt.color = p.markup;
+        fmt.background = p.hard_break_bg;
+    } else if f & CODE_BLOCK != 0 {
         fmt.color = if content { p.code } else { p.markup };
         fmt.background = p.code_bg;
     } else if f & CODE != 0 {
@@ -292,6 +306,22 @@ mod tests {
         assert_eq!(color_of(text, "- n"), p.list_marker);
         assert_eq!(color_of(text, "- d"), p.list_marker);
         assert_eq!(color_of(text, "nested"), p.text);
+    }
+
+    #[test]
+    fn hard_breaks_are_visible() {
+        let p = Palette::from_visuals(&egui::Visuals::dark());
+        let job = |text: &str| layout_job(text, &FontId::monospace(12.0), &p, &[], None);
+        let bg = |text: &str, pos: usize| section_at(&job(text), pos).format.background;
+        // Два пробела в конце строки абзаца — перенос, подложка у пробелов.
+        assert_eq!(bg("a  \nb", 1), p.hard_break_bg);
+        assert_eq!(bg("a  \nb", 2), p.hard_break_bg);
+        assert_ne!(bg("a  \nb", 3), p.hard_break_bg);
+        assert_eq!(bg("a\\\nb", 1), p.hard_break_bg);
+        // Не перенос: один пробел, конец абзаца, блок кода.
+        assert_ne!(bg("a \nb", 1), p.hard_break_bg);
+        assert_ne!(bg("a  \n\nb", 1), p.hard_break_bg);
+        assert_ne!(bg("```\na  \nb\n```", 5), p.hard_break_bg);
     }
 
     #[test]

@@ -20,8 +20,10 @@ and a [link to CommonMark](https://commonmark.org). Autolink: <https://github.co
 
 Кириллица: **жирный**, *курсив*, `код`, ~~зачёркнутый~~.
 
-Line with a hard break at the end  
-and the next line.
+Line with a hard break at the end: two spaces, highlighted in the editor  
+and the next line. A backslash at the end works too:\
+the third line. Without them, lines join
+into one paragraph.
 
 ## Lists
 
