@@ -18,6 +18,15 @@ impl Edit {
     }
 }
 
+/// Удалить выделенный текст; курсор — на его месте.
+pub fn delete_selection(selection: Range<usize>) -> Edit {
+    Edit {
+        selection: selection.start..selection.start,
+        range: selection,
+        replacement: String::new(),
+    }
+}
+
 /// Обернуть выделение маркером (`**`, `*`, `` ` ``) или снять обёртку, если она уже есть
 /// — внутри выделения или сразу вокруг него. Без выделения вставляет пару маркеров
 /// и ставит курсор между ними.
@@ -246,6 +255,15 @@ mod tests {
         edit.apply(&mut t);
         let selected = t[edit.selection.clone()].to_owned();
         (t, selected)
+    }
+
+    #[test]
+    fn delete_selection_puts_cursor_in_its_place() {
+        let edit = delete_selection(2..5);
+        let mut text = String::from("ab123cd");
+        edit.apply(&mut text);
+        assert_eq!(text, "abcd");
+        assert_eq!(edit.selection, 2..2);
     }
 
     #[test]

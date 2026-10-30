@@ -304,6 +304,9 @@ impl Preview {
         // После всех запросов кадра: отменить задания, которые больше не нужны.
         diagrams.end_frame();
 
+        crate::preview_menu::note_area(&ctx, output.inner_rect);
+        crate::preview_menu::show(&ctx);
+
         let viewport = output.inner_rect.height();
         PreviewGeometry {
             anchors,

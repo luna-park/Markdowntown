@@ -194,6 +194,13 @@ impl Editor {
             ui.fonts_mut(|f| f.layout_job(job))
         };
 
+        // Правая кнопка не должна сбрасывать выделение (egui ставит курсор по любой кнопке):
+        // оно нужно меню; запоминаем до `TextEdit` и возвращаем после.
+        let kept_selection = ctx
+            .input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
+            .then(|| TextEditState::load(&ctx, text_id)?.cursor.char_range())
+            .flatten();
+
         let mut galley_top = 0.0;
         let mut text_output = None;
         let scroll_output = scroll.show(ui, |ui| {
@@ -230,6 +237,11 @@ impl Editor {
             });
         });
         let output = text_output.expect("text edit is always shown");
+        if let Some(range) = kept_selection {
+            let mut state = TextEditState::load(&ctx, text_id).unwrap_or_default();
+            state.cursor.set_char_range(Some(range));
+            state.store(&ctx, text_id);
+        }
 
         if output.response.response.changed() {
             doc.mark_edited();
@@ -243,6 +255,22 @@ impl Editor {
             offset: scroll_output.state.offset.y,
             max_offset: (scroll_output.content_size.y - viewport).max(0.0),
         };
+
+        self.context_menu(&ctx, &output.response.response, doc, text_id);
+
+        // Выделение мышью у края или за краем: прокручивать, пока кнопка нажата.
+        let pointer_y = ctx.pointer_latest_pos().map(|p| p.y);
+        if output.response.response.dragged()
+            && let Some(delta) = drag_scroll_delta(
+                pointer_y,
+                scroll_output.inner_rect.y_range(),
+                ctx.input(|i| i.stable_dt),
+            )
+        {
+            let y = (geometry.offset + delta).clamp(0.0, geometry.max_offset);
+            self.pending_offset = Some(y);
+            ctx.request_repaint();
+        }
 
         if let Some(byte) = self.jump.take() {
             // Небольшой зазор сверху, чтобы заголовок не прилипал к краю.
@@ -510,6 +538,87 @@ impl Editor {
         );
     }
 
+    /// Меню по правой кнопке: буфер обмена, оформление выделения, команды над строками.
+    /// Выделение при открытии меню не меняется — команды работают с ним.
+    fn context_menu(
+        &mut self,
+        ctx: &egui::Context,
+        response: &egui::Response,
+        doc: &mut Document,
+        text_id: Id,
+    ) {
+        let Some(sel) = selection(ctx, text_id, &doc.text) else {
+            return;
+        };
+        let has_selection = !sel.is_empty();
+        let mut edit = None;
+        response.context_menu(|ui| {
+            let item = |ui: &mut egui::Ui, enabled: bool, label: &str, shortcut: &str| {
+                ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut))
+                    .clicked()
+            };
+            if item(ui, has_selection, tr!("Cut", "Вырезать"), "Ctrl+X") {
+                ctx.copy_text(doc.text[sel.clone()].to_owned());
+                edit = Some(commands::delete_selection(sel.clone()));
+            }
+            if item(ui, has_selection, tr!("Copy", "Копировать"), "Ctrl+C") {
+                ctx.copy_text(doc.text[sel.clone()].to_owned());
+            }
+            if item(ui, true, tr!("Paste", "Вставить"), "Ctrl+V") {
+                // Вставку выполняет `TextEdit` — ему нужен фокус, а клик по меню его забрал.
+                ctx.memory_mut(|m| m.request_focus(text_id));
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
+            if item(ui, has_selection, tr!("Delete", "Удалить"), "Del") {
+                edit = Some(commands::delete_selection(sel.clone()));
+            }
+            ui.separator();
+            if item(ui, true, tr!("Bold", "Жирный"), "Ctrl+B") {
+                edit = Some(commands::toggle_wrap(&doc.text, sel.clone(), "**"));
+            }
+            if item(ui, true, tr!("Italic", "Курсив"), "Ctrl+I") {
+                edit = Some(commands::toggle_wrap(&doc.text, sel.clone(), "*"));
+            }
+            if item(ui, true, tr!("Code", "Код"), "Ctrl+E") {
+                edit = Some(commands::toggle_wrap(&doc.text, sel.clone(), "`"));
+            }
+            if item(ui, true, tr!("Link", "Ссылка"), "Ctrl+K") {
+                edit = Some(commands::insert_link(&doc.text, sel.clone()));
+            }
+            ui.separator();
+            if item(
+                ui,
+                true,
+                tr!("Duplicate Lines", "Дублировать строки"),
+                "Ctrl+Shift+D",
+            ) {
+                edit = Some(lines::duplicate_lines(&doc.text, sel.clone()));
+            }
+            if item(
+                ui,
+                true,
+                tr!("Delete Lines", "Удалить строки"),
+                "Ctrl+Shift+K",
+            ) {
+                edit = Some(lines::delete_lines(&doc.text, sel.clone()));
+            }
+            ui.separator();
+            if item(ui, true, tr!("Select All", "Выделить всё"), "Ctrl+A") {
+                let mut state = TextEditState::load(ctx, text_id).unwrap_or_default();
+                let end = CCursor::new(doc.text.chars().count());
+                state
+                    .cursor
+                    .set_char_range(Some(CCursorRange::two(CCursor::new(0), end)));
+                state.store(ctx, text_id);
+                ctx.memory_mut(|m| m.request_focus(text_id));
+            }
+        });
+        if let Some(edit) = edit {
+            apply_edit(ctx, text_id, doc, edit);
+            ctx.memory_mut(|m| m.request_focus(text_id));
+        }
+    }
+
     /// Горячие клавиши форматирования, команды над строками и Enter в списках.
     /// Обрабатываются до `TextEdit`, чтобы он не получил эти нажатия.
     fn handle_editing_keys(&mut self, ctx: &egui::Context, doc: &mut Document, text_id: Id) {
@@ -691,6 +800,22 @@ fn paint_line_numbers(
     }
 }
 
+/// Сдвиг прокрутки за кадр при выделении мышью: указатель выше или ниже области —
+/// прокручивать в ту сторону, чем дальше указатель, тем быстрее. `None` — указатель
+/// внутри области (или неизвестен).
+fn drag_scroll_delta(pointer_y: Option<f32>, view: egui::Rangef, dt: f32) -> Option<f32> {
+    let y = pointer_y?;
+    let distance = if y < view.min {
+        y - view.min
+    } else if y > view.max {
+        y - view.max
+    } else {
+        return None;
+    };
+    let speed = (200.0 + distance.abs() * 10.0).min(3000.0);
+    Some(speed * distance.signum() * dt)
+}
+
 fn char_to_byte(text: &str, char_index: usize) -> usize {
     text.char_indices()
         .nth(char_index)
@@ -714,6 +839,18 @@ fn hash_str(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_scroll_only_outside_view() {
+        let view = egui::Rangef::new(100.0, 500.0);
+        assert_eq!(drag_scroll_delta(None, view, 0.016), None);
+        assert_eq!(drag_scroll_delta(Some(300.0), view, 0.016), None);
+        assert!(drag_scroll_delta(Some(520.0), view, 0.016).unwrap() > 0.0);
+        assert!(drag_scroll_delta(Some(60.0), view, 0.016).unwrap() < 0.0);
+        let near = drag_scroll_delta(Some(510.0), view, 0.016).unwrap();
+        let far = drag_scroll_delta(Some(900.0), view, 0.016).unwrap();
+        assert!(far > near);
+    }
 
     #[test]
     fn char_byte_conversions() {

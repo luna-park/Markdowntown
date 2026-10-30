@@ -17,6 +17,7 @@ mod logging;
 mod math;
 mod outline;
 mod preview;
+mod preview_menu;
 mod recovery;
 mod scroll_sync;
 mod segment;

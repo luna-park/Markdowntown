@@ -1710,6 +1710,10 @@ impl MarkdowntownApp {
 }
 
 impl eframe::App for MarkdowntownApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        crate::preview_menu::filter_input(ctx, raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.dialog.is_none() {

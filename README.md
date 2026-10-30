@@ -51,6 +51,9 @@ falls back to software rendering.
 | Heading level 1–6 (again on the same level: plain text) | Ctrl+1 … Ctrl+6 |
 | Check or uncheck a task (a plain list item becomes a task) | Ctrl+Enter |
 
+Right-click in the editor for the clipboard, formatting and line commands; right-click in the
+preview to copy the selected text.
+
 Click a diagram in the preview to open it in a zoomable window. Links to other Markdown
 files open them in a tab, and links like `#section` jump to the heading.
 
