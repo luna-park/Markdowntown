@@ -189,23 +189,27 @@ impl Tab {
     pub fn show_editor(&mut self, ui: &mut egui::Ui) -> EditorGeometry {
         let (editor_scroll, _) = self.pending_scroll;
         self.pending_scroll.0 = None;
-        let geometry = self.editor.show(ui, &mut self.doc, editor_scroll);
-        if self.outline_jump.is_none() {
-            self.top_byte =
-                geometry.byte_at_offset(&self.doc.text, geometry.offset + SECTION_PROBE);
-        }
-        geometry
+        self.editor.show(ui, &mut self.doc, editor_scroll)
+    }
+
+    pub fn after_editor_only(&mut self, ctx: &egui::Context, editor: &EditorGeometry) {
+        self.outline_jump = None;
+        self.update_top_byte(
+            ctx,
+            editor.byte_at_offset(&self.doc.text, editor.offset + SECTION_PROBE),
+        );
     }
 
     pub fn show_preview(
         &mut self,
         ui: &mut egui::Ui,
         diagrams: &mut DiagramService,
+        preview_only: bool,
     ) -> PreviewGeometry {
         let (_, preview_scroll) = self.pending_scroll;
         self.pending_scroll.1 = None;
         self.preview
-            .show(ui, &mut self.doc, preview_scroll, diagrams)
+            .show(ui, &mut self.doc, preview_scroll, preview_only, diagrams)
     }
 
     /// После показа обеих панелей: синхронная прокрутка и переход по оглавлению.
@@ -221,7 +225,15 @@ impl Tab {
         } else {
             self.scroll_sync.update(&self.doc.text, editor, preview)
         };
-        // Превью тоже переходит к заголовку — и при выключенной синхронной прокрутке.
+        if self.outline_jump.is_none() {
+            let top = if self.scroll_sync.preview_leads() {
+                preview.byte_for_y(preview.offset + SECTION_PROBE, self.doc.text.len())
+            } else {
+                editor.byte_at_offset(&self.doc.text, editor.offset + SECTION_PROBE)
+            };
+            self.update_top_byte(ui.ctx(), top);
+        }
+        // Превью переходит к заголовку и при выключенной синхронной прокрутке.
         self.jump_preview(preview);
         if self.pending_scroll != (None, None) {
             ui.ctx().request_repaint();
@@ -229,10 +241,21 @@ impl Tab {
     }
 
     /// После показа одного превью (режим Preview only).
-    pub fn after_preview_only(&mut self, preview: &PreviewGeometry) {
+    pub fn after_preview_only(&mut self, ctx: &egui::Context, preview: &PreviewGeometry) {
         self.jump_preview(preview);
         if self.outline_jump.is_none() {
-            self.top_byte = preview.byte_for_y(preview.offset + SECTION_PROBE, self.doc.text.len());
+            self.update_top_byte(
+                ctx,
+                preview.byte_for_y(preview.offset + SECTION_PROBE, self.doc.text.len()),
+            );
+        }
+    }
+
+    fn update_top_byte(&mut self, ctx: &egui::Context, byte: usize) {
+        if self.top_byte != byte {
+            self.top_byte = byte;
+            // Оглавление уже было отрисовано в этом кадре.
+            ctx.request_repaint();
         }
     }
 
@@ -244,11 +267,6 @@ impl Tab {
         self.outline_jump = Some(byte);
         // Сразу подсветить выбранный раздел, не дожидаясь прокрутки.
         self.top_byte = byte;
-    }
-
-    /// Только редактор: превью не прокручивается.
-    pub fn cancel_preview_jump(&mut self) {
-        self.outline_jump = None;
     }
 
     /// Прокрутка превью к заголовку из оглавления. Высоты блоков, которые ещё не
@@ -288,6 +306,133 @@ fn unique_key(id: u64) -> u64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn preview_only_find_shortcut_focuses_query() {
+        let ctx = egui::Context::default();
+        let mut diagrams = DiagramService::new(&ctx);
+        let mut tab = Tab::new(1, Document::new_untitled("Первый абзац".to_owned()));
+        let command = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::F,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: command,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            tab.show_preview(ui, &mut diagrams, true);
+        });
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == crate::i18n::tr!("Find", "Найти")
+        )));
+    }
+
+    #[test]
+    fn preview_find_highlights_formatted_text_and_visits_offscreen_matches() {
+        let ctx = egui::Context::default();
+        let mut diagrams = DiagramService::new(&ctx);
+        let filler = "Другой абзац.\n\n".repeat(80);
+        let text = format!(
+            "СИНЯЯ **птица** у окна.\n\n{filler}Синяя [птица](https://example.org) в саду.\n\n{filler}синяя птица у реки.\n\n{filler}"
+        );
+        let mut tab = Tab::new(1, Document::new_untitled(text));
+        let mut frame = |events, preview_only| {
+            let mut scroll = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(420.0, 240.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let preview = tab.show_preview(ui, &mut diagrams, preview_only);
+                    if preview_only {
+                        tab.after_preview_only(ui.ctx(), &preview);
+                    }
+                    scroll = preview.offset;
+                },
+            );
+            output.textures_delta.clear();
+            (scroll, output)
+        };
+        let key = |key, modifiers| {
+            vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+            ]
+        };
+        frame(vec![], true);
+        frame(vec![], true);
+        frame(key(egui::Key::F, egui::Modifiers::COMMAND), true);
+        let (_, first) = frame(
+            vec![
+                egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                egui::Event::Text("синяя птица".into()),
+            ],
+            true,
+        );
+        let has_highlighted = |output: &egui::FullOutput, word: &str| {
+            output.shapes.iter().any(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text
+                        .galley
+                        .rect
+                        .translate(text.pos.to_vec2())
+                        .intersects(shape.clip_rect) =>
+                {
+                    text.galley.job.sections.iter().any(|section| {
+                        section.format.background != egui::Color32::TRANSPARENT
+                            && text.galley.text()
+                                [section.byte_range.start.0..section.byte_range.end.0]
+                                .trim()
+                                == word
+                    })
+                }
+                _ => false,
+            })
+        };
+        assert!(has_highlighted(&first, "СИНЯЯ"));
+        assert!(has_highlighted(&first, "птица"));
+
+        frame(key(egui::Key::Enter, egui::Modifiers::NONE), true);
+        let (offset, second) = frame(vec![], true);
+        assert!(offset > 500.0, "{offset}");
+        assert!(has_highlighted(&second, "Синяя"));
+        assert!(has_highlighted(&second, "птица"));
+
+        let mut previous = key(egui::Key::Enter, egui::Modifiers::SHIFT);
+        previous.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        frame(previous, true);
+        let (offset, _) = frame(vec![], true);
+        assert!(offset < 30.0, "{offset}");
+
+        let (_, both) = frame(key(egui::Key::F, egui::Modifiers::COMMAND), false);
+        assert!(!has_highlighted(&both, "СИНЯЯ"));
+        assert!(!both.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "синяя птица"
+        )));
+    }
+
     /// Кадр «редактор + превью» без окна; смещения прокрутки панелей.
     fn frame(ctx: &egui::Context, tab: &mut Tab, diagrams: &mut DiagramService) -> (f32, f32) {
         let input = egui::RawInput {
@@ -306,7 +451,8 @@ mod tests {
                 .inner;
             let preview = egui::CentralPanel::default()
                 .show(ui, |ui| {
-                    ui.push_id(id, |ui| tab.show_preview(ui, diagrams)).inner
+                    ui.push_id(id, |ui| tab.show_preview(ui, diagrams, false))
+                        .inner
                 })
                 .inner;
             offsets = (editor.offset, preview.offset);

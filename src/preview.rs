@@ -1,6 +1,8 @@
 //! Панель превью: рендер сегментов документа.
 
-use std::cell::RefCell;
+mod search;
+
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
@@ -53,6 +55,7 @@ pub struct Preview {
     /// Колонка по центру шириной не больше [`READABLE_WIDTH`] (View → Readable width).
     pub readable_width: bool,
     md_cache: CommonMarkCache,
+    search: search::Search,
     /// Версия документа, для которой посчитаны `segments`.
     version: Option<(u64, u64)>,
     segments: Vec<Segment>,
@@ -85,6 +88,7 @@ impl Preview {
         ui: &mut egui::Ui,
         doc: &mut Document,
         scroll_to: Option<f32>,
+        preview_only: bool,
         diagrams: &mut DiagramService,
     ) -> PreviewGeometry {
         apply_preview_style(ui);
@@ -123,6 +127,18 @@ impl Preview {
             self.version = Some(doc.version());
         }
 
+        let reveal = if preview_only {
+            self.search.show(
+                ui,
+                &doc.text,
+                doc.version(),
+                &self.segments,
+                &self.footnotes,
+            )
+        } else {
+            None
+        };
+
         let may_request = match self.last_edit {
             None => true,
             Some(t) => {
@@ -151,6 +167,7 @@ impl Preview {
 
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt("preview_scroll")
+            .animated(reveal.is_none())
             .auto_shrink(false);
         if let Some(offset) = scroll_to {
             scroll = scroll.vertical_scroll_offset(offset);
@@ -203,6 +220,7 @@ impl Preview {
                                 stable: true,
                                 ..
                             }) = self.heights.get(&key)
+                                && reveal != Some(i)
                                 && (top + height < viewport.min.y || top > viewport.max.y)
                             {
                                 // Невидимый блок: занять его место, не раскладывая текст.
@@ -229,10 +247,19 @@ impl Preview {
                             if in_footnotes {
                                 footnote_style(&mut block_ui);
                             }
+                            let found_rect = Cell::new(None);
                             let render = RenderContext {
                                 math_fn: &math_fn,
                                 image_base: image_base.as_deref(),
                                 footnote_numbers: &self.footnote_numbers,
+                                highlights: preview_only
+                                    .then(|| {
+                                        self.search.highlights(
+                                            i,
+                                            (reveal == Some(i)).then_some(&found_rect),
+                                        )
+                                    })
+                                    .flatten(),
                             };
                             let edited = show_markdown(
                                 &mut block_ui,
@@ -247,6 +274,9 @@ impl Preview {
                                 egui::vec2(width, block_ui.min_rect().height()),
                             );
                             ui.advance_cursor_after_rect(used);
+                            if let Some(rect) = found_rect.get() {
+                                ui.scroll_to_rect(rect, None);
+                            }
                             if edited {
                                 // Диапазоны сегментов устарели — пересчитаем на следующем кадре.
                                 ctx.request_repaint();
@@ -502,6 +532,7 @@ struct RenderContext<'a> {
     /// Префикс относительных путей картинок (папка документа).
     image_base: Option<&'a str>,
     footnote_numbers: &'a HashMap<String, usize>,
+    highlights: Option<egui_commonmark::TextHighlights<'a>>,
 }
 
 /// Рендерит Markdown-блок. `appendix` — невидимый хвост (определения ссылок и сносок
@@ -520,6 +551,7 @@ fn show_markdown(
         .render_until(block_len)
         .render_math_fn(Some(render.math_fn))
         .footnote_numbers(render.footnote_numbers)
+        .text_highlights(render.highlights)
         .alerts(crate::alerts::preview_bundle(ui.visuals().dark_mode));
     if let Some(base) = render.image_base {
         viewer = viewer.default_implicit_uri_scheme(base);
@@ -553,6 +585,70 @@ fn file_uri_prefix(dir: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hard_break_selection_copies_first_line_without_covering_next_glyph() {
+        use egui::{Event, Modifiers, PointerButton};
+
+        let ctx = egui::Context::default();
+        crate::style::apply_global(&ctx);
+        let mut cache = CommonMarkCache::default();
+        let mut frame = |events| {
+            let mut input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            crate::preview_menu::filter_input(&ctx, &mut input);
+            let mut output = ctx.run_ui(input, |ui| {
+                crate::preview_menu::note_area(ui.ctx(), ui.max_rect());
+                CommonMarkViewer::new().show(
+                    ui,
+                    &mut cache,
+                    "Первая строка  \nВторая строка  \nТретья строка",
+                );
+            });
+            output.textures_delta.clear();
+            output
+        };
+        let first = frame(vec![]);
+        let rows: Vec<_> = first
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().ends_with("строка") => {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows.len(), 3);
+        let select_from = rows[0] + egui::vec2(1.0, 4.0);
+        let select_to = rows[2] + egui::vec2(30.0, 4.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            pressed,
+            button: PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        frame(vec![Event::PointerMoved(select_from)]);
+        frame(vec![
+            button(select_from, true),
+            Event::PointerMoved(select_to),
+        ]);
+        frame(vec![]);
+        frame(vec![button(select_to, false)]);
+        let copied = frame(vec![Event::Copy]);
+        assert!(copied.platform_output.commands.iter().any(|command|
+            matches!(command, egui::OutputCommand::CopyText(text) if text.starts_with("Первая строка\nВторая строка"))),
+            "{:?}", copied.platform_output.commands);
+        assert!(
+            !copied.shapes.iter().any(|clipped| matches!(&clipped.shape,
+                egui::Shape::Text(text) if text.galley.text() == "\n" &&
+                    text.galley.rows.iter().any(|row| !row.visuals.mesh.indices.is_empty())
+            )),
+            "a layout newline must not paint a selection over a text row"
+        );
+    }
 
     /// Выравнивание однострочных ячеек таблицы (патч `egui_commonmark`).
     #[test]

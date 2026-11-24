@@ -84,7 +84,7 @@ pub use parsers::pulldown::{cell_shift, column_widths};
 pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
-pub use egui_commonmark_backend::misc::CommonMarkCache;
+pub use egui_commonmark_backend::misc::{CommonMarkCache, TextHighlight, TextHighlights};
 
 #[cfg(feature = "better_syntax_highlighting")]
 pub use egui_commonmark_backend::syntect;
@@ -256,6 +256,12 @@ impl<'f> CommonMarkViewer<'f> {
     /// Markdowntown patch: номера сносок по меткам (см. `CommonMarkOptions::footnote_numbers`).
     pub fn footnote_numbers(mut self, numbers: &'f std::collections::HashMap<String, usize>) -> Self {
         self.options.footnote_numbers = Some(numbers);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn text_highlights(mut self, highlights: Option<TextHighlights<'f>>) -> Self {
+        self.options.text_highlights = highlights;
         self
     }
 

@@ -4,7 +4,7 @@
 mod commands;
 mod highlight;
 mod lines;
-mod search;
+pub(crate) mod search;
 pub mod stats;
 
 use std::ops::Range;

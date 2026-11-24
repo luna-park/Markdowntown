@@ -3,6 +3,7 @@
 A Markdown editor for Windows with a live preview and Mermaid diagrams.
 
 - Editor with Markdown syntax highlighting, line numbers, find and replace
+- Find in rendered text in preview-only mode, with Enter / Shift+Enter to navigate matches
 - Live preview: GitHub-flavored Markdown (tables, task lists, footnotes, alerts),
   syntax-highlighted code, local and remote images
 - Math formulas: `$…$` inline and `$$…$$` on their own line (LaTeX, rendered like KaTeX)
@@ -41,7 +42,7 @@ falls back to software rendering.
 | Export to HTML | Ctrl+Shift+E |
 | Show or hide the outline (list of headings) | Ctrl+Shift+O |
 | Bold / Italic / Inline code / Link | Ctrl+B / Ctrl+I / Ctrl+E / Ctrl+K |
-| Find / Replace | Ctrl+F / Ctrl+H |
+| Find (editor or preview-only mode) / Replace (editor) | Ctrl+F / Ctrl+H |
 | Go to line | Ctrl+G |
 | Zoom the whole UI | Ctrl+Plus / Ctrl+Minus or Ctrl+mouse wheel; Ctrl+0 resets |
 | Continue a list or quote | Enter at the end of an item (Enter on an empty item ends the list) |

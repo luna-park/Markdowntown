@@ -73,6 +73,8 @@ const INDENT: f32 = 12.0;
 pub struct Outline {
     /// Заголовки и версия документа, для которой они посчитаны.
     cache: Option<((u64, u64), Vec<Heading>)>,
+    /// Позиция активного заголовка в последнем показанном кадре.
+    shown_section: Option<(u64, usize)>,
 }
 
 impl Outline {
@@ -91,17 +93,21 @@ impl Outline {
         version: (u64, u64),
         top: usize,
     ) -> Option<usize> {
+        let previous = self.shown_section;
         let headings = self.headings(text, version);
         if headings.is_empty() {
+            self.shown_section = None;
             ui.weak(tr!("No headings", "Нет заголовков"));
             return None;
         }
         // Уровни сдвигаются к самому крупному в документе: если H1 нет, H2 — без отступа.
         let min_level = headings.iter().map(|h| h.level).min().unwrap_or(1);
         let current = current_index(headings, top);
+        let section = current.map(|i| (version.0, headings[i].byte));
         let mut clicked = None;
         egui::ScrollArea::vertical()
             .id_salt("outline_scroll")
+            .animated(false)
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -120,12 +126,16 @@ impl Outline {
                         let response = ui
                             .add(egui::Button::selectable(current == Some(i), text).truncate())
                             .on_hover_text(label);
+                        if current == Some(i) && section != previous {
+                            ui.scroll_to_rect(response.rect, None);
+                        }
                         if response.clicked() {
                             clicked = Some(h.byte);
                         }
                     });
                 }
             });
+        self.shown_section = section;
         clicked
     }
 }
@@ -133,6 +143,39 @@ impl Outline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_heading_is_scrolled_into_view() {
+        let ctx = egui::Context::default();
+        let document: String = (0..50).map(|i| format!("# Section {i}\n\n")).collect();
+        let mut outline = Outline::default();
+        let mut frame = |top| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(240.0, 150.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    outline.show(ui, &document, (1, 1), top);
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        frame(0);
+        let top = document.find("# Section 40").unwrap();
+        frame(top);
+        let output = frame(top);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Section 40" && shape.clip_rect.contains(text.pos)
+        )), "visible headings: {:?}", output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some((text.galley.text(), text.pos)),
+            _ => None,
+        }).collect::<Vec<_>>());
+    }
 
     fn titles(text: &str) -> Vec<(u8, String, usize)> {
         headings(text)

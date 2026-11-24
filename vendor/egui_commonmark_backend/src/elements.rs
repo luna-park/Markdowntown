@@ -20,7 +20,9 @@ pub fn soft_break(ui: &mut Ui) {
 
 #[inline]
 pub fn newline(ui: &mut Ui) {
-    ui.label("\n");
+    // Markdowntown patch: метка переноса занимает часть следующей строки. Если
+    // включить выделение, фон её перевода строки перекроет первые глифы.
+    ui.add(egui::Label::new("\n").selectable(false));
 }
 
 pub fn bullet_point(ui: &mut Ui) {
@@ -130,7 +132,7 @@ pub fn code_block<'t>(
     max_width: f32,
     text: &str,
     layouter: &'t mut dyn FnMut(&Ui, &dyn TextBuffer, f32) -> std::sync::Arc<egui::Galley>,
-) {
+) -> egui::text_edit::TextEditOutput {
     let mut text = text.strip_suffix('\n').unwrap_or(text);
 
     // To manually add background color to the code block, we imitate what
@@ -214,6 +216,7 @@ pub fn code_block<'t>(
         };
         ui.copy_text(copy_text);
     }
+    output
 }
 
 // Stripped down version of egui's Checkbox. The only difference is that this

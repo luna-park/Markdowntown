@@ -814,25 +814,27 @@ impl CommonMarkViewerInternal {
         max_width: f32,
     ) {
         match event {
-            pulldown_cmark::Event::Start(tag) => self.start_tag(ui, tag, cache, options),
+            pulldown_cmark::Event::Start(tag) => {
+                self.start_tag(ui, tag, src_span.start, cache, options)
+            }
             pulldown_cmark::Event::End(tag) => self.end_tag(ui, tag, cache, options, max_width),
             pulldown_cmark::Event::Text(text) => {
-                self.event_text(text, ui);
+                self.event_text(text, ui, src_span.start, options);
             }
             pulldown_cmark::Event::Code(text) => {
                 self.text_style.code = true;
-                self.event_text(text, ui);
+                self.event_text(text, ui, src_span.start, options);
                 self.text_style.code = false;
             }
             pulldown_cmark::Event::InlineHtml(text) => {
-                self.event_text(text, ui);
+                self.event_text(text, ui, src_span.start, options);
             }
 
             pulldown_cmark::Event::Html(text) => {
                 if options.html_fn.is_some() {
                     self.html_block.push_str(&text);
                 } else {
-                    self.event_text(text, ui);
+                    self.event_text(text, ui, src_span.start, options);
                 }
             }
             pulldown_cmark::Event::FootnoteReference(footnote) => {
@@ -878,14 +880,46 @@ impl CommonMarkViewerInternal {
         }
     }
 
-    fn event_text(&mut self, text: CowStr, ui: &mut Ui) {
+    fn event_text(
+        &mut self,
+        text: CowStr,
+        ui: &mut Ui,
+        source: usize,
+        options: &CommonMarkOptions,
+    ) {
         let rich_text = self.text_style.to_richtext(ui, &text);
         if let Some(image) = &mut self.image {
             image.alt_text.push(rich_text);
         } else if let Some(block) = &mut self.code_block {
             block.content.push_str(&text);
         } else if let Some(link) = &mut self.link {
-            link.text.push(rich_text);
+            link.text.push((rich_text, source));
+        } else if let Some(highlights) = options.text_highlights.filter(|h| h.has_source(source)) {
+            let mut job = egui::text::LayoutJob::default();
+            rich_text.append_to(
+                &mut job,
+                ui.style(),
+                egui::FontSelection::Default,
+                ui.text_valign(),
+            );
+            let reveal = highlights.apply(&mut job, source, ui.visuals().dark_mode);
+            let label = egui::Label::new(job);
+            if let Some(byte) = reveal {
+                let (pos, galley, response) = label.layout_in_ui(ui);
+                highlights.note_match(ui, crate::misc::match_rect(pos, &galley, byte));
+                if ui.is_rect_visible(response.rect) {
+                    egui::text_selection::LabelSelectionState::label_text_selection(
+                        ui,
+                        &response,
+                        pos,
+                        galley,
+                        ui.visuals().text_color(),
+                        egui::Stroke::NONE,
+                    );
+                }
+            } else {
+                ui.add(label);
+            }
         } else {
             ui.label(rich_text);
         }
@@ -895,6 +929,7 @@ impl CommonMarkViewerInternal {
         &mut self,
         ui: &mut Ui,
         tag: pulldown_cmark::Tag,
+        source: usize,
         cache: &mut CommonMarkCache,
         options: &CommonMarkOptions,
     ) {
@@ -937,12 +972,14 @@ impl CommonMarkViewerInternal {
                 match c {
                     pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                         self.code_block = Some(crate::CodeBlock {
+                            source,
                             lang: Some(lang.to_string()),
                             content: "".to_string(),
                         });
                     }
                     pulldown_cmark::CodeBlockKind::Indented => {
                         self.code_block = Some(crate::CodeBlock {
+                            source,
                             lang: None,
                             content: "".to_string(),
                         });

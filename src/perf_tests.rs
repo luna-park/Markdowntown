@@ -26,7 +26,8 @@ impl TestPreview {
         doc: &mut Document,
         scroll_to: Option<f32>,
     ) -> crate::scroll_sync::PreviewGeometry {
-        self.preview.show(ui, doc, scroll_to, &mut self.diagrams)
+        self.preview
+            .show(ui, doc, scroll_to, false, &mut self.diagrams)
     }
 }
 

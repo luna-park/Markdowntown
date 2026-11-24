@@ -1602,18 +1602,20 @@ impl MarkdowntownApp {
         // Id элементов вкладки (прокрутка, таблицы, окна) — свои у каждой вкладки.
         match self.settings.view_mode {
             ViewMode::Editor => {
-                egui::CentralPanel::default()
-                    .show(ui, |ui| ui.push_id(id, |ui| tab.show_editor(ui)));
-                tab.cancel_preview_jump();
+                let editor = egui::CentralPanel::default()
+                    .show(ui, |ui| ui.push_id(id, |ui| tab.show_editor(ui)).inner)
+                    .inner;
+                tab.after_editor_only(ui.ctx(), &editor);
                 return;
             }
             ViewMode::Preview => {
                 let preview = egui::CentralPanel::default()
                     .show(ui, |ui| {
-                        ui.push_id(id, |ui| tab.show_preview(ui, diagrams)).inner
+                        ui.push_id(id, |ui| tab.show_preview(ui, diagrams, true))
+                            .inner
                     })
                     .inner;
-                tab.after_preview_only(&preview);
+                tab.after_preview_only(ui.ctx(), &preview);
                 return;
             }
             ViewMode::Both => {}
@@ -1638,7 +1640,8 @@ impl MarkdowntownApp {
         let editor = editor.inner;
         let preview = egui::CentralPanel::default()
             .show(ui, |ui| {
-                ui.push_id(id, |ui| tab.show_preview(ui, diagrams)).inner
+                ui.push_id(id, |ui| tab.show_preview(ui, diagrams, false))
+                    .inner
             })
             .inner;
         tab.after_both(ui, &editor, &preview);

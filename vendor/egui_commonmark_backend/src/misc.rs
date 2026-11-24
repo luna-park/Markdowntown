@@ -1,6 +1,6 @@
 use crate::alerts::AlertBundle;
 use egui::{RichText, TextBuffer, TextStyle, Ui, text::LayoutJob};
-use std::collections::HashMap;
+use std::{cell::Cell, collections::HashMap, ops::Range};
 
 use crate::pulldown::ScrollableCache;
 
@@ -16,6 +16,101 @@ use syntect::{
 const DEFAULT_THEME_LIGHT: &str = "base16-ocean.light";
 #[cfg(feature = "better_syntax_highlighting")]
 const DEFAULT_THEME_DARK: &str = "base16-ocean.dark";
+
+/// Markdowntown patch: диапазон совпадения внутри текста одного события Markdown.
+pub struct TextHighlight {
+    pub source: usize,
+    pub bytes: Range<usize>,
+    pub index: usize,
+    pub first: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct TextHighlights<'a> {
+    pub ranges: &'a [TextHighlight],
+    pub current: usize,
+    pub reveal: Option<&'a Cell<Option<egui::Rect>>>,
+}
+
+impl<'a> TextHighlights<'a> {
+    fn for_source(self, source: usize) -> impl Iterator<Item = &'a TextHighlight> {
+        let first = self.ranges.partition_point(|h| h.source < source);
+        self.ranges[first..]
+            .iter()
+            .take_while(move |h| h.source == source)
+    }
+
+    pub fn has_source(self, source: usize) -> bool {
+        self.for_source(source).next().is_some()
+    }
+
+    pub fn note_match(self, ui: &Ui, rect: egui::Rect) {
+        if let Some(result) = self.reveal {
+            result.set(Some(rect));
+            // Если таблица имеет свою горизонтальную прокрутку, она обработает X.
+            // Превью снаружи прочитает сохранённый прямоугольник для прокрутки по Y.
+            ui.scroll_to_rect(rect, None);
+        }
+    }
+
+    pub fn apply(self, job: &mut LayoutJob, source: usize, dark: bool) -> Option<usize> {
+        let mut highlights = self.for_source(source).peekable();
+        highlights.peek()?;
+        let mut sections = Vec::new();
+        let mut reveal = None;
+        for section in std::mem::take(&mut job.sections) {
+            let mut start = section.byte_range.start.0;
+            let end = section.byte_range.end.0;
+            let mut leading_space = section.leading_space;
+            let mut push = |bytes: Range<usize>, background| {
+                let mut part = section.clone();
+                part.byte_range = bytes.start.into()..bytes.end.into();
+                part.leading_space = std::mem::take(&mut leading_space);
+                if let Some(color) = background {
+                    part.format.background = color;
+                }
+                sections.push(part);
+            };
+            while let Some(h) = highlights.peek().filter(|h| h.bytes.start < end) {
+                if h.bytes.end <= start {
+                    highlights.next();
+                    continue;
+                }
+                if start < h.bytes.start {
+                    push(start..h.bytes.start, None);
+                    start = h.bytes.start;
+                }
+                let current = self.current == h.index;
+                if current && self.reveal.is_some() && h.first && start == h.bytes.start {
+                    reveal = Some(start);
+                }
+                let color = if current {
+                    egui::Color32::from_rgba_unmultiplied(255, 140, 0, if dark { 144 } else { 176 })
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(255, 215, 0, if dark { 64 } else { 112 })
+                };
+                let stop = h.bytes.end.min(end);
+                push(start..stop, Some(color));
+                start = stop;
+                if stop == h.bytes.end {
+                    highlights.next();
+                }
+            }
+            if start < end {
+                push(start..end, None);
+            }
+        }
+        job.sections = sections;
+        reveal
+    }
+}
+
+/// Markdowntown patch: показать строку совпадения, даже если виджет занимает много строк.
+pub fn match_rect(pos: egui::Pos2, galley: &egui::Galley, byte: usize) -> egui::Rect {
+    let mut cursor = egui::text::CCursor::new(galley.text()[..byte].chars().count());
+    cursor.prefer_next_row = true;
+    galley.pos_from_cursor(cursor).translate(pos.to_vec2())
+}
 
 pub struct CommonMarkOptions<'f> {
     pub indentation_spaces: usize,
@@ -43,6 +138,7 @@ pub struct CommonMarkOptions<'f> {
     /// Markdowntown patch: номера сносок по меткам (как на GitHub — по порядку первой
     /// ссылки). Без номера показывается метка.
     pub footnote_numbers: Option<&'f HashMap<String, usize>>,
+    pub text_highlights: Option<TextHighlights<'f>>,
 }
 
 impl std::fmt::Debug for CommonMarkOptions<'_> {
@@ -89,6 +185,7 @@ impl Default for CommonMarkOptions<'_> {
             enable_scroll_to_heading: false,
             render_until: None,
             footnote_numbers: None,
+            text_highlights: None,
         }
     }
 }
@@ -227,7 +324,7 @@ pub fn bold_family(ui: &Ui) -> Option<egui::FontFamily> {
 #[derive(Default)]
 pub struct Link {
     pub destination: String,
-    pub text: Vec<RichText>,
+    pub text: Vec<(RichText, usize)>,
 }
 
 impl Link {
@@ -249,13 +346,36 @@ impl Link {
         }
 
         let mut layout_job = LayoutJob::default();
-        for t in text {
+        let mut reveal = false;
+        for (t, source) in text {
+            let Some(highlights) = options.text_highlights.filter(|h| h.has_source(source)) else {
+                t.append_to(
+                    &mut layout_job,
+                    ui.style(),
+                    egui::FontSelection::Default,
+                    egui::Align::LEFT,
+                );
+                continue;
+            };
+            let mut part = LayoutJob::default();
             t.append_to(
-                &mut layout_job,
+                &mut part,
                 ui.style(),
                 egui::FontSelection::Default,
                 egui::Align::LEFT,
             );
+            reveal |= highlights
+                .apply(&mut part, source, ui.visuals().dark_mode)
+                .is_some();
+            let start = layout_job.text.len();
+            layout_job.text.push_str(&part.text);
+            layout_job
+                .sections
+                .extend(part.sections.into_iter().map(|mut section| {
+                    section.byte_range.start = (section.byte_range.start.0 + start).into();
+                    section.byte_range.end = (section.byte_range.end.0 + start).into();
+                    section
+                }));
         }
         // Markdowntown patch: текст ссылки — всегда цветом ссылок. Готовый `LayoutJob`
         // хранит цвета своих секций, и у ссылки внутри **жирного** или в заголовке
@@ -267,6 +387,9 @@ impl Link {
         }
         if cache.link_hooks().contains_key(&destination) {
             let ui_link = ui.link(layout_job);
+            if reveal && let Some(highlights) = options.text_highlights {
+                highlights.note_match(ui, ui_link.rect);
+            }
             report_hovered_link(&ui_link, &destination);
             if ui_link.clicked() || ui_link.middle_clicked() {
                 cache.link_hooks_mut().insert(destination, true);
@@ -275,12 +398,18 @@ impl Link {
             && let Some(stripped) = destination.strip_prefix("#")
         {
             let ui_link = ui.link(layout_job);
+            if reveal && let Some(highlights) = options.text_highlights {
+                highlights.note_match(ui, ui_link.rect);
+            }
             report_hovered_link(&ui_link, &destination);
             if ui_link.clicked() {
                 scroll_to_heading.replace(stripped.to_string());
             };
         } else {
             let response = ui.hyperlink_to(layout_job, &destination);
+            if reveal && let Some(highlights) = options.text_highlights {
+                highlights.note_match(ui, response.rect);
+            }
             report_hovered_link(&response, &destination);
         }
     }
@@ -326,6 +455,7 @@ impl Image {
 }
 
 pub struct CodeBlock {
+    pub source: usize,
     pub lang: Option<String>,
     pub content: String,
 }
@@ -341,6 +471,7 @@ impl CodeBlock {
         ui.scope(|ui| {
             Self::pre_syntax_highlighting(cache, options, ui);
 
+            let mut reveal = None;
             let mut layout = |ui: &Ui, string: &dyn TextBuffer, wrap_width: f32| {
                 let mut job = if let Some(lang) = &self.lang {
                     self.syntax_highlighting(cache, options, lang, ui, string.as_str())
@@ -348,11 +479,19 @@ impl CodeBlock {
                     plain_highlighting(ui, string.as_str())
                 };
 
+                if let Some(h) = options.text_highlights {
+                    reveal = h.apply(&mut job, self.source, ui.visuals().dark_mode);
+                }
                 job.wrap.max_width = wrap_width;
                 ui.fonts_mut(|f| f.layout_job(job))
             };
 
-            crate::elements::code_block(ui, max_width, &self.content, &mut layout);
+            let output = crate::elements::code_block(ui, max_width, &self.content, &mut layout);
+            if let Some(byte) = reveal
+                && let Some(highlights) = options.text_highlights
+            {
+                highlights.note_match(ui, match_rect(output.galley_pos, &output.galley, byte));
+            }
         });
     }
 }

@@ -96,6 +96,10 @@ impl Default for ScrollSync {
 const EPS: f32 = 1.0;
 
 impl ScrollSync {
+    pub fn preview_leads(&self) -> bool {
+        self.enabled && self.driver == Some(Pane::Preview)
+    }
+
     /// Прокрутку превью задали не мы и не пользователь (переход по оглавлению):
     /// не принимать её за действие пользователя.
     pub fn expect_preview(&mut self, offset: f32) {

@@ -21,6 +21,7 @@ struct MenuState {
     open: Option<Pos2>,
     /// Прямоугольник меню в последнем кадре — для клика.
     menu_rect: Rect,
+    deferred_events: Vec<Event>,
 }
 
 impl Default for MenuState {
@@ -29,6 +30,7 @@ impl Default for MenuState {
             area: None,
             open: None,
             menu_rect: Rect::NOTHING,
+            deferred_events: Vec::new(),
         }
     }
 }
@@ -55,9 +57,15 @@ fn has_selection(ctx: &Context) -> bool {
 }
 
 /// Для `eframe::App::raw_input_hook`: забирает правый клик в превью (открывает меню)
-/// и клики по открытому меню, не пуская их к egui.
+/// и клики по открытому меню, не пуская их к egui. Начало быстрого drag
+/// передаётся отдельным кадром, чтобы egui взял координаты нажатия.
 pub fn filter_input(ctx: &Context, input: &mut egui::RawInput) {
     let mut state = load(ctx);
+    if !state.deferred_events.is_empty() {
+        input
+            .events
+            .splice(..0, std::mem::take(&mut state.deferred_events));
+    }
     let was_open = state.open;
     // Превью, которого не было в последних кадрах (другой режим вида), не считается.
     let area = state
@@ -69,7 +77,50 @@ pub fn filter_input(ctx: &Context, input: &mut egui::RawInput) {
     {
         ctx.request_repaint();
     }
+    if let Some(area) = area
+        && let Some(split) = drag_start_split(&input.events, area)
+    {
+        state.deferred_events = input.events.split_off(split);
+        ctx.request_repaint();
+    }
     store(ctx, state);
+}
+
+/// У egui одна позиция указателя для кадра. Если нажатие и движение пришли
+/// вместе, выделение привязывается к позиции движения вместо места нажатия.
+fn drag_start_split(events: &[Event], area: Rect) -> Option<usize> {
+    let mut press = None;
+    for (i, event) in events.iter().enumerate() {
+        match event {
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                ..
+            } => {
+                press = area.contains(*pos).then_some((i, *pos));
+            }
+            Event::PointerMoved(pos)
+            | Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                ..
+            } => {
+                if let Some((index, start)) = press
+                    && start != *pos
+                {
+                    return Some(index + 1);
+                }
+                if matches!(event, Event::PointerButton { .. }) {
+                    press = None;
+                }
+            }
+            Event::PointerGone | Event::WindowFocused(false) => press = None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Чистая часть `filter_input`. `true` — события изменились.
