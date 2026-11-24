@@ -14,7 +14,7 @@ use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
 use crate::document::Document;
 use crate::i18n::{tr, trf};
 use crate::math::MathCache;
-use crate::scroll_sync::PreviewGeometry;
+use crate::scroll_sync::{PreviewGeometry, drag_scroll_delta};
 use crate::segment::{self, Segment, SegmentKind};
 use crate::style;
 use crate::viewer::DiagramViewer;
@@ -56,6 +56,10 @@ pub struct Preview {
     pub readable_width: bool,
     md_cache: CommonMarkCache,
     search: search::Search,
+    /// Полоса документа, которую пересекло выделение. Сохраняем раскладку в ней,
+    /// даже когда её начало или конец прокручены за пределы экрана.
+    selection_span: Option<egui::Rangef>,
+    selecting: bool,
     /// Версия документа, для которой посчитаны `segments`.
     version: Option<(u64, u64)>,
     segments: Vec<Segment>,
@@ -165,9 +169,14 @@ impl Preview {
             .chain(self.footnotes.iter().map(|&i| (i, true)))
             .collect();
 
+        if (!self.selecting && !crate::preview_menu::has_selection(&ctx))
+            || ctx.input(|i| i.pointer.primary_pressed() && !i.modifiers.shift)
+        {
+            self.selection_span = None;
+        }
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt("preview_scroll")
-            .animated(reveal.is_none())
+            .animated(reveal.is_none() && !self.selecting)
             .auto_shrink(false);
         if let Some(offset) = scroll_to {
             scroll = scroll.vertical_scroll_offset(offset);
@@ -188,6 +197,14 @@ impl Preview {
         // Колонка — внутри области прокрутки: полоса прокрутки остаётся у края панели,
         // колесо мыши работает и над полями по бокам.
         let output = scroll.show_viewport(ui, |ui, viewport| {
+            let view = viewport.y_range();
+            let extend = |span: egui::Rangef| {
+                egui::Rangef::new(span.min.min(view.min), span.max.max(view.max))
+            };
+            let keep = self
+                .selection_span
+                .map(|span| if self.selecting { extend(span) } else { span });
+            egui_commonmark::begin_selection_tracking(&ctx, keep.is_some());
             centered_column(ui, max_width, |ui| {
                 let content_top = ui.min_rect().top();
                 let width = ui.available_width();
@@ -221,6 +238,9 @@ impl Preview {
                                 ..
                             }) = self.heights.get(&key)
                                 && reveal != Some(i)
+                                && keep.is_none_or(|span| {
+                                    !span.intersects(egui::Rangef::new(top, top + height))
+                                })
                                 && (top + height < viewport.min.y || top > viewport.max.y)
                             {
                                 // Невидимый блок: занять его место, не раскладывая текст.
@@ -238,9 +258,13 @@ impl Preview {
                                 ui.cursor().min,
                                 egui::vec2(width, f32::INFINITY),
                             );
+                            // Пропущенные и отрисованные блоки по-разному расходуют auto-id.
+                            // Id выделенного текста должен переживать появление блоков выше него.
+                            let block_id =
+                                ui.make_persistent_id(("markdown_block", i, in_footnotes));
                             let mut block_ui = ui.new_child(
                                 egui::UiBuilder::new()
-                                    .id_salt(i)
+                                    .id(block_id)
                                     .max_rect(block_rect)
                                     .layout(*ui.layout()),
                             );
@@ -323,7 +347,17 @@ impl Preview {
                         }
                     }
                 }
-            })
+            });
+            let (pressed, dragged) = egui_commonmark::finish_selection_tracking(&ctx);
+            self.selection_span = if pressed {
+                Some(keep.map_or(view, extend))
+            } else {
+                keep
+            };
+            self.selecting = pressed;
+            if dragged {
+                scroll_during_selection(ui);
+            }
         });
 
         if let Some(viewer) = &mut self.viewer
@@ -345,6 +379,30 @@ impl Preview {
             content_height: output.content_size.y,
             footnotes: footnote_tops,
         }
+    }
+}
+
+/// ScrollArea блокирует колесо, пока другой виджет захватил мышь.
+fn scroll_during_selection(ui: &egui::Ui) {
+    let delta = ui.input(|i| {
+        let wheel = if i.modifiers.command || i.modifiers.ctrl {
+            0.0
+        } else {
+            i.smooth_scroll_delta().y
+        };
+        let edge = drag_scroll_delta(
+            i.pointer.latest_pos().map(|p| p.y),
+            ui.clip_rect().y_range(),
+            i.stable_dt,
+        )
+        .unwrap_or_default();
+        wheel - edge
+    });
+    if delta != 0.0 {
+        ui.scroll_with_delta_animation(
+            egui::vec2(0.0, delta),
+            egui::style::ScrollAnimation::none(),
+        );
     }
 }
 
@@ -585,6 +643,146 @@ fn file_uri_prefix(dir: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn select_while_scrolling(wheel: bool, up: bool) {
+        use egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, Rect, vec2};
+
+        let ctx = egui::Context::default();
+        let mut preview = Preview::default();
+        let mut diagrams = DiagramService::new(&ctx);
+        let text: String = (0..100)
+            .map(|i| format!("Paragraph {i:02} has some text.\n\n"))
+            .collect();
+        let mut doc = Document::new_untitled(text);
+        let mut frame = |events, offset| {
+            let mut geometry = None;
+            let rect = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 250.0));
+            let mut input = egui::RawInput {
+                screen_rect: Some(rect),
+                events,
+                ..Default::default()
+            };
+            crate::preview_menu::filter_input(&ctx, &mut input);
+            let mut output = ctx.run_ui(input, |ui| {
+                if up {
+                    egui::Panel::top("test_tabs")
+                        .exact_size(55.0)
+                        .show(ui, |_| {});
+                }
+                egui::Panel::bottom("test_status")
+                    .exact_size(60.0)
+                    .show(ui, |_| {});
+                egui::CentralPanel::default().show(ui, |ui| {
+                    geometry = Some(preview.show(ui, &mut doc, offset, true, &mut diagrams));
+                });
+            });
+            output.textures_delta.clear();
+            (geometry.unwrap(), output)
+        };
+        let before = if up { 690.0 } else { 0.0 };
+        frame(vec![], Some(before));
+        let (_, initial) = frame(vec![], Some(before));
+        let start_text = if up { "Paragraph 22" } else { "Paragraph 00" };
+        let pos = initial
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with(start_text) => {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let start = pos + vec2(1.0, 6.0);
+        let end = if up {
+            egui::pos2(pos.x + 55.0, 2.0)
+        } else {
+            pos + vec2(55.0, if wheel { 100.0 } else { 224.0 })
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            pressed,
+            button: PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        frame(vec![Event::PointerMoved(start)], None);
+        frame(vec![button(start, true)], None);
+        frame(vec![Event::PointerMoved(end)], None);
+        let mut offset = 0.0;
+        for _ in 0..24 {
+            let events = if wheel {
+                vec![Event::MouseWheel {
+                    unit: MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: vec2(0.0, -30.0),
+                    modifiers: Modifiers::NONE,
+                }]
+            } else {
+                vec![]
+            };
+            offset = frame(events, None).0.offset;
+        }
+        assert!(
+            if up {
+                offset < before - 180.0
+            } else {
+                offset > 180.0
+            },
+            "selection scroll offset: {offset}"
+        );
+        frame(vec![button(end, false)], None);
+        let after_release = frame(vec![], None).0.offset;
+        frame(
+            vec![Event::PointerMoved(egui::pos2(pos.x + 55.0, 100.0))],
+            None,
+        );
+        let (after_wheel, _) = frame(
+            vec![Event::MouseWheel {
+                unit: MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: vec2(0.0, -300.0),
+                modifiers: Modifiers::NONE,
+            }],
+            None,
+        );
+        assert!(
+            after_wheel.offset > after_release,
+            "wheel after release: {}",
+            after_wheel.offset
+        );
+        let (_, output) = frame(vec![Event::Copy], None);
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            });
+        assert!(
+            copied.is_some_and(|text| if up {
+                text.contains("Paragraph 14") && text.contains("Paragraph 21")
+            } else {
+                text.starts_with("Paragraph 00") && text.contains("Paragraph 09")
+            }),
+            "selected range after scroll: {copied:?}"
+        );
+    }
+
+    #[test]
+    fn mouse_drag_scrolls_and_keeps_preview_selection() {
+        select_while_scrolling(false, false);
+    }
+
+    #[test]
+    fn wheel_scrolls_during_preview_selection() {
+        select_while_scrolling(true, false);
+    }
+
+    #[test]
+    fn mouse_drag_scrolls_up_and_keeps_preview_selection() {
+        select_while_scrolling(false, true);
+    }
 
     #[test]
     fn hard_break_selection_copies_first_line_without_covering_next_glyph() {

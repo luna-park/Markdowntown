@@ -452,7 +452,7 @@ impl CommonMarkViewerInternal {
                 self.process_event(ui, &mut events_iter, e, src_span, cache, options, max_width);
             }
 
-            ui.label(" ".repeat(options.indentation_spaces));
+            ui.add(egui::Label::new(" ".repeat(options.indentation_spaces)).selectable(false));
             self.line.should_start_newline = true;
             self.line.should_end_newline = false;
             // Required to ensure that the content is aligned with the identation
@@ -903,25 +903,14 @@ impl CommonMarkViewerInternal {
                 ui.text_valign(),
             );
             let reveal = highlights.apply(&mut job, source, ui.visuals().dark_mode);
-            let label = egui::Label::new(job);
-            if let Some(byte) = reveal {
-                let (pos, galley, response) = label.layout_in_ui(ui);
-                highlights.note_match(ui, crate::misc::match_rect(pos, &galley, byte));
-                if ui.is_rect_visible(response.rect) {
-                    egui::text_selection::LabelSelectionState::label_text_selection(
-                        ui,
-                        &response,
-                        pos,
-                        galley,
-                        ui.visuals().text_color(),
-                        egui::Stroke::NONE,
-                    );
-                }
-            } else {
-                ui.add(label);
-            }
+            selectable_text(
+                ui,
+                egui::Label::new(job),
+                false,
+                reveal.map(|byte| (highlights, byte)),
+            );
         } else {
-            ui.label(rich_text);
+            text_label(ui, rich_text);
         }
     }
 
@@ -1120,7 +1109,7 @@ impl CommonMarkViewerInternal {
             pulldown_cmark::TagEnd::TableRow => {}
             pulldown_cmark::TagEnd::TableCell => {
                 // Ensure space between cells
-                ui.label("  ");
+                ui.add(egui::Label::new("  ").selectable(false));
             }
             pulldown_cmark::TagEnd::Emphasis => {
                 self.text_style.emphasis = false;

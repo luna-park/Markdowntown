@@ -85,6 +85,8 @@ pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend::misc::{CommonMarkCache, TextHighlight, TextHighlights};
+#[doc(hidden)]
+pub use egui_commonmark_backend::elements::{begin_selection_tracking, finish_selection_tracking};
 
 #[cfg(feature = "better_syntax_highlighting")]
 pub use egui_commonmark_backend::syntect;
@@ -429,7 +431,10 @@ impl List {
 
         let len = self.items.len();
         if let Some(item) = self.items.last_mut() {
-            ui.label(" ".repeat((len - 1) * options.indentation_spaces));
+            ui.add(
+                egui::Label::new(" ".repeat((len - 1) * options.indentation_spaces))
+                    .selectable(false),
+            );
 
             if let Some(number) = &mut item.current_number {
                 number_point(ui, &number.to_string());

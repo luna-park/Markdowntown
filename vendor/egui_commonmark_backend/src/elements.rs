@@ -1,4 +1,123 @@
-use egui::{self, NumExt, RichText, Sense, TextBuffer, TextStyle, Ui, Vec2, epaint};
+use egui::{
+    self, NumExt, Response, RichText, Sense, TextBuffer, TextStyle, Ui, Vec2, WidgetText, epaint,
+};
+
+/// Markdowntown patch: egui должен получать оба конца выделения и после их
+/// прокрутки за край. Невидимый текст участвует в выделении, но не в hit-test.
+#[derive(Clone)]
+struct SelectionTracking {
+    retain: bool,
+    pressed: bool,
+    dragged: bool,
+}
+
+const SELECTION_TRACKING: &str = "markdowntown-preview-selection";
+
+pub fn begin_selection_tracking(ctx: &egui::Context, retain: bool) {
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new(SELECTION_TRACKING),
+            SelectionTracking {
+                retain,
+                pressed: false,
+                dragged: false,
+            },
+        );
+    });
+}
+
+pub fn finish_selection_tracking(ctx: &egui::Context) -> (bool, bool) {
+    ctx.data_mut(|data| {
+        let id = egui::Id::new(SELECTION_TRACKING);
+        let state = data.get_temp::<SelectionTracking>(id);
+        data.remove::<SelectionTracking>(id);
+        state.map_or((false, false), |state| (state.pressed, state.dragged))
+    })
+}
+
+fn track_pointer(ui: &Ui, response: &Response) {
+    let pressed = response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down());
+    let dragged = response.dragged_by(egui::PointerButton::Primary);
+    if pressed || dragged {
+        ui.ctx().data_mut(|data| {
+            let id = egui::Id::new(SELECTION_TRACKING);
+            if let Some(mut state) = data.get_temp::<SelectionTracking>(id) {
+                state.pressed |= pressed || dragged;
+                state.dragged |= dragged;
+                data.insert_temp(id, state);
+            }
+        });
+    }
+}
+
+pub fn text_label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
+    selectable_text(ui, egui::Label::new(text), false, None)
+}
+
+pub fn selectable_text(
+    ui: &mut Ui,
+    label: egui::Label,
+    link: bool,
+    reveal: Option<(crate::misc::TextHighlights<'_>, usize)>,
+) -> Response {
+    let (pos, galley, response) = label.layout_in_ui(ui);
+    let kind = if link {
+        egui::WidgetType::Link
+    } else {
+        egui::WidgetType::Label
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(kind, ui.is_enabled(), galley.text()));
+    if let Some((highlights, byte)) = reveal {
+        highlights.note_match(ui, crate::misc::match_rect(pos, &galley, byte));
+    }
+    let visible = ui.is_rect_visible(response.rect);
+    let selectable = ui.style().interaction.selectable_labels;
+    let retain = selectable
+        && !visible
+        && ui.ctx().data(|data| {
+            data.get_temp::<SelectionTracking>(egui::Id::new(SELECTION_TRACKING))
+                .is_some_and(|state| state.retain)
+        });
+    if !visible && !retain {
+        return response;
+    }
+
+    let color = if link {
+        ui.visuals().hyperlink_color
+    } else {
+        ui.visuals().text_color()
+    };
+    let underline = if response.has_focus() || (link && response.hovered()) {
+        egui::Stroke::new(ui.style().interact(&response).fg_stroke.width, color)
+    } else {
+        egui::Stroke::NONE
+    };
+    if selectable {
+        track_pointer(ui, &response);
+        let clip = ui.clip_rect();
+        if retain {
+            // Исключаем скрытые строки из выбора позиции движущегося конца.
+            ui.set_clip_rect(egui::Rect::NOTHING);
+        }
+        egui::text_selection::LabelSelectionState::label_text_selection(
+            ui, &response, pos, galley, color, underline,
+        );
+        if retain {
+            ui.set_clip_rect(clip);
+        }
+    } else {
+        ui.painter()
+            .add(epaint::TextShape::new(pos, galley, color).with_underline(underline));
+    }
+    if link && response.hovered() {
+        ui.set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+pub fn text_link(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
+    selectable_text(ui, egui::Label::new(text).sense(Sense::click()), true, None)
+}
 
 #[inline]
 pub fn rule(ui: &mut Ui, end_line: bool) {
@@ -15,7 +134,7 @@ pub fn rule(ui: &mut Ui, end_line: bool) {
 
 #[inline]
 pub fn soft_break(ui: &mut Ui) {
-    ui.label(" ");
+    text_label(ui, " ");
 }
 
 #[inline]
@@ -73,7 +192,12 @@ pub fn footnote_start(ui: &mut Ui, label: &str, number: &str) {
         .raised()
         .small()
         .color(ui.visuals().hyperlink_color);
-    let label_response = ui.add(egui::Label::new(text).sense(Sense::hover()));
+    let label_response = selectable_text(
+        ui,
+        egui::Label::new(text).sense(Sense::hover()),
+        false,
+        None,
+    );
     // Область нажатия выше и ниже надписи. В стороны её не расширить: текст превью
     // выделяемый, и следующая надпись (добавлена позже, значит «выше») перехватила бы
     // нажатие в общей с ней области.
@@ -93,9 +217,13 @@ pub fn footnote_start(ui: &mut Ui, label: &str, number: &str) {
 pub fn footnote_backref(ui: &mut Ui, label: &str) {
     ui.add_space(width_body_space(ui));
     let text = RichText::new("↩").color(ui.visuals().hyperlink_color);
-    let response = ui
-        .add(egui::Label::new(text).sense(Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let response = selectable_text(
+        ui,
+        egui::Label::new(text).sense(Sense::click()),
+        false,
+        None,
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand);
     let url = format!("#fnref-{label}");
     crate::misc::report_hovered_link(&response, &url);
     if response.clicked() {
@@ -148,6 +276,8 @@ pub fn code_block<'t>(
         // prevent trailing lines
         .desired_rows(1)
         .show(ui);
+
+    track_pointer(ui, &output.response);
 
     // Background color + frame (This is lost when TextEdit it not editable)
     let frame_rect = output.response.rect;

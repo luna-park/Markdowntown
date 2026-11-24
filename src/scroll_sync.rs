@@ -171,6 +171,22 @@ impl ScrollSync {
     }
 }
 
+/// Сдвиг прокрутки за кадр при выделении мышью: указатель выше или ниже области —
+/// прокручивать в ту сторону, чем дальше указатель, тем быстрее. `None` — указатель
+/// внутри области (или неизвестен).
+pub fn drag_scroll_delta(pointer_y: Option<f32>, view: egui::Rangef, dt: f32) -> Option<f32> {
+    let y = pointer_y?;
+    let distance = if y < view.min {
+        y - view.min
+    } else if y > view.max {
+        y - view.max
+    } else {
+        return None;
+    };
+    let speed = (200.0 + distance.abs() * 10.0).min(3000.0);
+    Some(speed * distance.signum() * dt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

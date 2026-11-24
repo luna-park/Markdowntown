@@ -386,7 +386,7 @@ impl Link {
             section.format.color = link_color;
         }
         if cache.link_hooks().contains_key(&destination) {
-            let ui_link = ui.link(layout_job);
+            let ui_link = crate::elements::text_link(ui, layout_job);
             if reveal && let Some(highlights) = options.text_highlights {
                 highlights.note_match(ui, ui_link.rect);
             }
@@ -397,7 +397,7 @@ impl Link {
         } else if options.enable_scroll_to_heading
             && let Some(stripped) = destination.strip_prefix("#")
         {
-            let ui_link = ui.link(layout_job);
+            let ui_link = crate::elements::text_link(ui, layout_job);
             if reveal && let Some(highlights) = options.text_highlights {
                 highlights.note_match(ui, ui_link.rect);
             }
@@ -406,7 +406,17 @@ impl Link {
                 scroll_to_heading.replace(stripped.to_string());
             };
         } else {
-            let response = ui.hyperlink_to(layout_job, &destination);
+            let response = crate::elements::text_link(ui, layout_job);
+            if response.clicked_with_open_in_background() {
+                ui.open_url(egui::OpenUrl::new_tab(&destination));
+            } else if response.clicked() {
+                ui.open_url(egui::OpenUrl::same_tab(&destination));
+            }
+            let response = if ui.style().url_in_tooltip {
+                response.on_hover_text(&destination)
+            } else {
+                response
+            };
             if reveal && let Some(highlights) = options.text_highlights {
                 highlights.note_match(ui, response.rect);
             }

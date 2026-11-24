@@ -51,7 +51,7 @@ pub fn note_area(ctx: &Context, area: Rect) {
     store(ctx, state);
 }
 
-fn has_selection(ctx: &Context) -> bool {
+pub fn has_selection(ctx: &Context) -> bool {
     ctx.with_plugin(|state: &mut egui::text_selection::LabelSelectionState| state.has_selection())
         .unwrap_or(false)
 }

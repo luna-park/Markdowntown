@@ -43,7 +43,7 @@ pub fn alert_ui(alert: &Alert, ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) 
         if let Some(bold) = crate::misc::bold_family(ui) {
             title = title.family(bold);
         }
-        ui.label(title);
+        crate::elements::text_label(ui, title);
         // end line
         newline(ui);
         add_contents(ui);
