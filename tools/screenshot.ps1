@@ -1,6 +1,6 @@
-# Скриншот окна Markdowntown для визуальной проверки (и, при необходимости, ввод).
+# Скриншот клиентской области Markdowntown для визуальной проверки (и, при необходимости, ввод).
 #   .\tools\screenshot.ps1 -Exe target\debug\markdowntown.exe -FileArg examples\showcase.md -Out shot.png
-# Ввод (-ClickX/-Clicks/-Wheel/-TypeText) отправляется только если окно на переднем плане.
+# Снимки и ввод (-ClickX/-Clicks/-Wheel/-TypeText) требуют активного окна Markdowntown.
 
 param(
     [Parameter(Mandatory)] [string] $Exe,
@@ -19,12 +19,16 @@ param(
     [string] $Out2 = "",
     [int] $Out2DelayMs = 1500
 )
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public static class W {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
@@ -53,13 +57,39 @@ public static class W {
 "@
 [W]::SetProcessDPIAware() | Out-Null
 $p = if ($FileArg) { Start-Process $Exe -ArgumentList "`"$FileArg`"" -PassThru } else { Start-Process $Exe -PassThru }
-# Ввод (мышь/клавиатура) отправляется только если наше окно на переднем плане,
-# иначе он попадёт в чужое окно пользователя.
 function Assert-Foreground([IntPtr] $h) {
-    [W]::SetForegroundWindow($h) | Out-Null
-    Start-Sleep -Milliseconds 100
-    if ([W]::GetForegroundWindow() -ne $h) { throw "app window is not in the foreground; input aborted" }
+    [uint32] $owner = 0
+    [W]::GetWindowThreadProcessId($h, [ref] $owner) | Out-Null
+    if ($owner -ne $p.Id -or [W]::GetForegroundWindow() -ne $h) {
+        throw "Markdowntown window lost foreground"
+    }
 }
+
+function Save-ClientScreenshot([IntPtr] $h, [string] $path) {
+    Assert-Foreground $h
+    $client = New-Object W+RECT
+    $origin = New-Object W+POINT
+    if (![W]::GetClientRect($h, [ref] $client) -or ![W]::ClientToScreen($h, [ref] $origin) -or
+        $client.R -le 0 -or $client.B -le 0) {
+        throw "Markdowntown client area is unavailable"
+    }
+
+    $bitmap = [System.Drawing.Bitmap]::new($client.R, $client.B)
+    try {
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($origin.X, $origin.Y, 0, 0, $bitmap.Size)
+            Assert-Foreground $h
+            $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+        } finally {
+            $graphics.Dispose()
+        }
+    } finally {
+        $bitmap.Dispose()
+    }
+    "saved $path ($($client.R) x $($client.B))"
+}
+
 try {
     $deadline = (Get-Date).AddSeconds(20)
     $hwnd = [IntPtr]::Zero
@@ -73,14 +103,18 @@ try {
     [W]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds $WaitMs
     $r = New-Object W+RECT
-    [W]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+    if (![W]::GetWindowRect($hwnd, [ref] $r)) { throw "Markdowntown window is unavailable" }
     if ($ClickX -ge 0) {
         Assert-Foreground $hwnd
         [W]::SetCursorPos($r.L + $ClickX, $r.T + $ClickY) | Out-Null
         Start-Sleep -Milliseconds 300
+        Assert-Foreground $hwnd
         [W]::mouse_event(0x2, 0, 0, 0, [IntPtr]::Zero)
-        Start-Sleep -Milliseconds 50
-        [W]::mouse_event(0x4, 0, 0, 0, [IntPtr]::Zero)
+        try {
+            Start-Sleep -Milliseconds 50
+        } finally {
+            [W]::mouse_event(0x4, 0, 0, 0, [IntPtr]::Zero)
+        }
         Start-Sleep -Milliseconds 800
     }
     foreach ($c in ($Clicks -split ';' | Where-Object { $_ })) {
@@ -88,9 +122,13 @@ try {
         Assert-Foreground $hwnd
         [W]::SetCursorPos($r.L + [int]$xy[0], $r.T + [int]$xy[1]) | Out-Null
         Start-Sleep -Milliseconds 250
+        Assert-Foreground $hwnd
         [W]::mouse_event(0x2, 0, 0, 0, [IntPtr]::Zero)
-        Start-Sleep -Milliseconds 50
-        [W]::mouse_event(0x4, 0, 0, 0, [IntPtr]::Zero)
+        try {
+            Start-Sleep -Milliseconds 50
+        } finally {
+            [W]::mouse_event(0x4, 0, 0, 0, [IntPtr]::Zero)
+        }
         Start-Sleep -Milliseconds 700
     }
     if ($Wheel) {
@@ -100,6 +138,7 @@ try {
         Start-Sleep -Milliseconds 200
         for ($k = 0; $k -lt [Math]::Abs([int]$w[2]); $k++) {
             $d = if ([int]$w[2] -lt 0) { -120 } else { 120 }
+            Assert-Foreground $hwnd
             [W]::mouse_wheel(0x0800, 0, 0, $d, [IntPtr]::Zero)
             Start-Sleep -Milliseconds 60
         }
@@ -111,18 +150,10 @@ try {
         [System.Windows.Forms.SendKeys]::SendWait($TypeText)
         Start-Sleep -Milliseconds 150
     }
-    $w = $r.R - $r.L; $h = $r.B - $r.T
-    if ([W]::GetForegroundWindow() -ne $hwnd) { Write-Warning "app window lost foreground; screenshot may show another window" }
-    $bmp = New-Object System.Drawing.Bitmap $w, $h
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
-    $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
-    "saved $Out ($w x $h)"
+    Save-ClientScreenshot $hwnd $Out
     if ($Out2) {
         Start-Sleep -Milliseconds $Out2DelayMs
-        $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
-        $bmp.Save($Out2, [System.Drawing.Imaging.ImageFormat]::Png)
-        "saved $Out2"
+        Save-ClientScreenshot $hwnd $Out2
     }
 } finally {
     if (!$p.HasExited) { Stop-Process $p -Force }
