@@ -14,7 +14,7 @@ use crate::diagram::{DiagramKey, DiagramService, DiagramState, DiagramTheme};
 use crate::document::Document;
 use crate::i18n::{tr, trf};
 use crate::math::MathCache;
-use crate::scroll_sync::{PreviewGeometry, drag_scroll_delta};
+use crate::scroll_sync::{PreviewGeometry, selection_scroll_delta};
 use crate::segment::{self, Segment, SegmentKind};
 use crate::style;
 use crate::viewer::DiagramViewer;
@@ -384,20 +384,7 @@ impl Preview {
 
 /// ScrollArea блокирует колесо, пока другой виджет захватил мышь.
 fn scroll_during_selection(ui: &egui::Ui) {
-    let delta = ui.input(|i| {
-        let wheel = if i.modifiers.command || i.modifiers.ctrl {
-            0.0
-        } else {
-            i.smooth_scroll_delta().y
-        };
-        let edge = drag_scroll_delta(
-            i.pointer.latest_pos().map(|p| p.y),
-            ui.clip_rect().y_range(),
-            i.stable_dt,
-        )
-        .unwrap_or_default();
-        wheel - edge
-    });
+    let delta = -ui.input(|input| selection_scroll_delta(input, ui.clip_rect().y_range()));
     if delta != 0.0 {
         ui.scroll_with_delta_animation(
             egui::vec2(0.0, delta),

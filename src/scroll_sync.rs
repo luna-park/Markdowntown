@@ -187,6 +187,23 @@ pub fn drag_scroll_delta(pointer_y: Option<f32>, view: egui::Rangef, dt: f32) ->
     Some(speed * distance.signum() * dt)
 }
 
+/// Сдвиг смещения панели, пока текст захватил мышь. В этот момент ScrollArea
+/// пропускает обработку колеса, поэтому учитываем его вместе с движением за краем.
+pub fn selection_scroll_delta(input: &egui::InputState, viewport: egui::Rangef) -> f32 {
+    let wheel = if input.modifiers.command || input.modifiers.ctrl {
+        0.0
+    } else {
+        input.smooth_scroll_delta().y
+    };
+    let edge = drag_scroll_delta(
+        input.pointer.latest_pos().map(|p| p.y),
+        viewport,
+        input.stable_dt,
+    )
+    .unwrap_or_default();
+    edge - wheel
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

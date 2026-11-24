@@ -6,7 +6,7 @@ mod highlight;
 mod lines;
 pub(crate) mod search;
 
-use crate::scroll_sync::drag_scroll_delta;
+use crate::scroll_sync::selection_scroll_delta;
 pub mod stats;
 
 use std::ops::Range;
@@ -260,18 +260,19 @@ impl Editor {
 
         self.context_menu(&ctx, &output.response.response, doc, text_id);
 
-        // Выделение мышью у края или за краем: прокручивать, пока кнопка нажата.
-        let pointer_y = ctx.pointer_latest_pos().map(|p| p.y);
-        if output.response.response.dragged()
-            && let Some(delta) = drag_scroll_delta(
-                pointer_y,
-                scroll_output.inner_rect.y_range(),
-                ctx.input(|i| i.stable_dt),
-            )
+        // ScrollArea блокирует колесо во время перетаскивания TextEdit.
+        if output
+            .response
+            .response
+            .dragged_by(egui::PointerButton::Primary)
         {
+            let delta = ctx
+                .input(|input| selection_scroll_delta(input, scroll_output.inner_rect.y_range()));
             let y = (geometry.offset + delta).clamp(0.0, geometry.max_offset);
-            self.pending_offset = Some(y);
-            ctx.request_repaint();
+            if y != geometry.offset {
+                self.pending_offset = Some(y);
+                ctx.request_repaint();
+            }
         }
 
         if let Some(byte) = self.jump.take() {
@@ -825,6 +826,87 @@ fn hash_str(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scroll_sync::drag_scroll_delta;
+
+    #[test]
+    fn wheel_scrolls_editor_while_selecting() {
+        use egui::text::CCursor;
+        use egui::{Event, MouseWheelUnit, PointerButton, Pos2, Rect, TouchPhase, pos2, vec2};
+
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx, None);
+        let text: String = (0..100)
+            .map(|i| format!("Line {i:02} has some text.\n"))
+            .collect();
+        let mut doc = Document::new_untitled(text);
+        let mut editor = Editor::for_tab(1);
+        let id = editor.text_id;
+        let mut frame = |events| {
+            let mut result = None;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(500.0, 250.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        result = Some(editor.show(ui, &mut doc, None));
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            result.unwrap()
+        };
+        frame(vec![]);
+        frame(vec![]);
+        let text_rect = ctx.read_response(id).unwrap().rect;
+        let start = text_rect.min + vec2(3.0, 8.0);
+        let end = pos2(start.x + 50.0, start.y + 80.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            pressed,
+            button: PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        let wheel = |y| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            phase: TouchPhase::Move,
+            delta: vec2(0.0, y),
+            modifiers: Modifiers::NONE,
+        };
+        let selection = || {
+            TextEditState::load(&ctx, id)
+                .unwrap()
+                .cursor
+                .char_range()
+                .unwrap()
+        };
+        frame(vec![Event::PointerMoved(start)]);
+        frame(vec![button(start, true)]);
+        frame(vec![Event::PointerMoved(end)]);
+        let before = selection();
+        assert_eq!(before.secondary, CCursor::new(0));
+        assert!(!before.is_empty());
+
+        for _ in 0..10 {
+            frame(vec![wheel(-30.0)]);
+        }
+        let offset = frame(vec![]).offset;
+        assert!(offset > 150.0, "offset after scrolling down: {offset}");
+        let after = selection();
+        assert_eq!(after.secondary, before.secondary);
+        assert!(after.primary.index > before.primary.index);
+
+        for _ in 0..10 {
+            frame(vec![wheel(30.0)]);
+        }
+        assert!(frame(vec![]).offset < offset - 100.0);
+        frame(vec![button(end, false)]);
+        let released = selection();
+        assert_eq!(released.secondary, before.secondary);
+        assert!(!released.is_empty());
+    }
 
     #[test]
     fn drag_scroll_only_outside_view() {
